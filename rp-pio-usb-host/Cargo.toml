@@ -1,0 +1,6 @@
+[package]
+name = "rp-pio-usb-host"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
