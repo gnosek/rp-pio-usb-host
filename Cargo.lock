@@ -609,8 +609,9 @@ dependencies = [
  "defmt-rtt",
  "embassy-executor",
  "embassy-rp",
- "embassy-time",
+ "embassy-usb-driver",
  "panic-probe",
+ "rp-pio-usb-host",
 ]
 
 [[package]]
@@ -1150,6 +1151,12 @@ dependencies = [
 [[package]]
 name = "rp-pio-usb-host"
 version = "0.1.0"
+dependencies = [
+ "embassy-rp",
+ "embassy-time",
+ "embassy-usb-driver",
+ "rp-pac",
+]
 
 [[package]]
 name = "rp2040-boot2"

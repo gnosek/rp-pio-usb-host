@@ -4,3 +4,7 @@
 //!
 //! The crate provides a direct root-port [`bus::Bus`] and an [`embassy`]
 //! adapter for `embassy-usb-host`.
+
+pub mod bus;
+mod chip;
+mod pio_instance;
