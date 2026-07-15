@@ -540,7 +540,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         &mut self,
         addr: u8,
         ep: u8,
-        mps: usize,
+        mps: u16,
         setup: &[u8; 8],
         data: &mut [u8],
     ) -> Result<usize, PipeError> {
@@ -603,7 +603,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
                 }
                 expect_data1 = !expect_data1;
                 stall_polls = 0; // progress — give the next packet a fresh budget
-                if payload_len < mps || total >= wlen {
+                if payload_len < mps as usize || total >= wlen {
                     completed = true;
                 }
             }

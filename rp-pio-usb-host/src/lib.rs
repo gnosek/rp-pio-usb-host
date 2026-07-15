@@ -11,7 +11,7 @@ mod clock;
 mod crc;
 mod encoding;
 mod pid;
-mod pio_instance;
+pub mod pio_instance;
 mod ram;
 mod rx_driver;
 mod rx_pio;
