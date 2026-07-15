@@ -15,6 +15,11 @@ name = "link_detect"
 test = false
 required-features = ["rp2040"]
 
+[[bin]]
+name = "usb_host_keyboard"
+test = false
+required-features = ["rp2040"]
+
 [features]
 rp2040 = ["embassy-rp/rp2040", "rp-pio-usb-host/rp2040"]
 rp235xa = ["embassy-rp/rp235xa", "rp-pio-usb-host/rp235xa"]

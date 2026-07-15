@@ -329,7 +329,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         Timer::after_micros(FRAME_INTERVAL_US as u64).await;
     }
 
-    async fn bus_reset(&mut self) {
+    pub(crate) async fn bus_reset(&mut self) {
         self.tx.drive_reset_se0();
         Timer::after(Duration::from_micros(RESET_SE0_US)).await;
         self.tx.release_reset();
@@ -483,6 +483,47 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         }
         self.mark_activity();
         (n, status, status == RxPacketStatus::ValidData)
+    }
+
+    /// One **IN** transaction (interrupt/bulk): send IN, catch the device reply.
+    /// Returns `Ok(Some(payload_len))` on a valid ACKed DATA packet (payload copied
+    /// into `out`, SYNC/PID/CRC stripped), `Ok(None)` on NAK / no reply (caller
+    /// should poll again), or `Err(Stall)` on a stalled endpoint.
+    pub(crate) fn in_once(
+        &mut self,
+        addr: u8,
+        ep: u8,
+        expect_data1: bool,
+        out: &mut [u8],
+    ) -> Result<Option<usize>, PipeError> {
+        self.mark_activity(); // an IN transaction is bus activity — stamp before the TX
+        let in_tok = crate::encoding::build_token(crate::pid::USB_PID_IN, addr, ep);
+
+        let mut pkt = [0u8; crate::encoding::MAX_DATA_PACKET_BYTES];
+        match self.in_reply(&in_tok, &mut pkt)? {
+            InReply::NoReply => Ok(None), // no reply caught
+            InReply::Data {
+                pid,
+                valid_crc: true,
+                payload_len,
+            } => {
+                let is_data1 = pid == crate::pid::USB_PID_DATA1;
+                if is_data1 != expect_data1 {
+                    return Ok(None);
+                }
+                if payload_len > out.len() {
+                    return Err(PipeError::BufferOverflow);
+                }
+                let copy = payload_len.min(out.len());
+                out[..copy].copy_from_slice(&pkt[2..2 + copy]);
+                Ok(Some(copy))
+            }
+            InReply::Data {
+                valid_crc: false, ..
+            } => Ok(None), // DATA caught but CRC failed
+            InReply::Nak => Ok(None),
+            InReply::Other => Ok(None),
+        }
     }
 
     /// One **OUT** transaction (interrupt/bulk or one control-OUT data packet): OUT token + DATA →
@@ -691,5 +732,41 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
             }
         }
         Err(PipeError::Timeout)
+    }
+
+    /// Single nonblocking step of a bulk/interrupt IN transfer.
+    pub(crate) fn request_in(
+        &mut self,
+        addr: u8,
+        ep: u8,
+        out: &mut [u8],
+        toggle_data1: &mut bool,
+    ) -> Result<usize, PipeError> {
+        match self.in_once(addr, ep, *toggle_data1, out) {
+            Ok(Some(n)) => {
+                *toggle_data1 = !*toggle_data1;
+                Ok(n)
+            }
+            Ok(None) => Err(PipeError::Timeout),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Single nonblocking step of a bulk/interrupt OUT transfer.
+    pub(crate) fn request_out(
+        &mut self,
+        addr: u8,
+        ep: u8,
+        data: &[u8],
+        toggle_data1: &mut bool,
+    ) -> Result<(), PipeError> {
+        match self.out_once(addr, ep, *toggle_data1, data) {
+            Ok(true) => {
+                *toggle_data1 = !*toggle_data1;
+                Ok(())
+            }
+            Ok(false) => Err(PipeError::Timeout),
+            Err(err) => Err(err),
+        }
     }
 }

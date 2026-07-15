@@ -370,7 +370,7 @@ source = "git+https://github.com/embassy-rs/embassy.git?rev=e5921a9d3a4a138f724e
 dependencies = [
  "embassy-futures",
  "embassy-hal-internal",
- "embassy-sync 0.8.0 (git+https://github.com/embassy-rs/embassy.git?rev=e5921a9d3a4a138f724ea40662599ff0fc42e6c7)",
+ "embassy-sync",
  "embedded-hal 0.2.7",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
@@ -437,7 +437,7 @@ source = "git+https://github.com/embassy-rs/embassy.git?rev=e5921a9d3a4a138f724e
 dependencies = [
  "embassy-futures",
  "embassy-net-driver",
- "embassy-sync 0.8.0 (git+https://github.com/embassy-rs/embassy.git?rev=e5921a9d3a4a138f724ea40662599ff0fc42e6c7)",
+ "embassy-sync",
 ]
 
 [[package]]
@@ -455,7 +455,7 @@ dependencies = [
  "embassy-embedded-hal",
  "embassy-futures",
  "embassy-hal-internal",
- "embassy-sync 0.8.0 (git+https://github.com/embassy-rs/embassy.git?rev=e5921a9d3a4a138f724ea40662599ff0fc42e6c7)",
+ "embassy-sync",
  "embassy-time",
  "embassy-time-driver",
  "embassy-time-queue-utils",
@@ -483,25 +483,11 @@ dependencies = [
 [[package]]
 name = "embassy-sync"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bbd85cf5a5ae56bdf26f618364af642d1d0a4e245cdd75cd9aabda382f65a81"
-dependencies = [
- "cfg-if",
- "critical-section",
- "defmt",
- "embedded-io-async 0.7.0",
- "futures-core",
- "futures-sink",
- "heapless 0.9.3",
-]
-
-[[package]]
-name = "embassy-sync"
-version = "0.8.0"
 source = "git+https://github.com/embassy-rs/embassy.git?rev=e5921a9d3a4a138f724ea40662599ff0fc42e6c7#e5921a9d3a4a138f724ea40662599ff0fc42e6c7"
 dependencies = [
  "cfg-if",
  "critical-section",
+ "defmt",
  "embedded-io-async 0.7.0",
  "futures-core",
  "futures-sink",
@@ -549,7 +535,7 @@ dependencies = [
  "bitflags 2.13.0",
  "embassy-futures",
  "embassy-net-driver-channel",
- "embassy-sync 0.8.0 (git+https://github.com/embassy-rs/embassy.git?rev=e5921a9d3a4a138f724ea40662599ff0fc42e6c7)",
+ "embassy-sync",
  "embassy-time",
  "embassy-usb-driver",
  "embedded-io-async 0.7.0",
@@ -576,7 +562,7 @@ dependencies = [
  "aligned",
  "bitflags 2.13.0",
  "defmt",
- "embassy-sync 0.8.0 (git+https://github.com/embassy-rs/embassy.git?rev=e5921a9d3a4a138f724ea40662599ff0fc42e6c7)",
+ "embassy-sync",
  "embassy-time",
  "embassy-usb",
  "embassy-usb-driver",
@@ -1286,7 +1272,7 @@ name = "rp-pio-usb-host"
 version = "0.1.0"
 dependencies = [
  "embassy-rp",
- "embassy-sync 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "embassy-sync",
  "embassy-time",
  "embassy-usb-driver",
  "fixed",
