@@ -13,3 +13,5 @@ embassy-rp = { version = "0.10.0", features = ["defmt", "time-driver", "critical
 embassy-time = { version = "0.5.1", features = ["defmt", "defmt-timestamp-uptime"] }
 embassy-usb-driver = { version = "0.2.2", features = ["defmt"] }
 rp-pac = { version = "7.0.0", default-features = false }
+fixed = "1.31.0"
+pio = "0.3.0"

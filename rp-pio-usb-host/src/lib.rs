@@ -7,4 +7,11 @@
 
 pub mod bus;
 mod chip;
+mod clock;
+mod crc;
+mod encoding;
+mod pid;
 mod pio_instance;
+mod ram;
+mod tx_driver;
+mod tx_pio;

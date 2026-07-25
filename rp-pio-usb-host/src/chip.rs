@@ -103,3 +103,15 @@ pub(crate) fn configure_pio_gpio_base<PIO: UsbPioInstance>(dp_pin: u8, dm_pin: u
         .write(|w| w.set_gpiobase(use_high_window));
     use_high_window
 }
+
+/// Convert an absolute BANK0 GPIO number into the PIO-local selector.
+///
+/// On RP235x with `GPIOBASE=16`, system GPIO16 becomes PIO-local pin 0. On
+/// RP2040, or when the RP235x low window is selected, the selector is unchanged.
+pub(crate) const fn pio_local_pin(pin: u8, high_window: bool) -> u8 {
+    if cfg!(any(feature = "rp235xa", feature = "rp235xb")) && high_window {
+        pin - 16
+    } else {
+        pin
+    }
+}

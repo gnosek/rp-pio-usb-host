@@ -5,6 +5,7 @@
 //! bulk, and interrupt transfers on top of these primitives.
 
 use crate::pio_instance::UsbPioInstance;
+use crate::tx_driver::TxDriver;
 use embassy_rp::Peri;
 use embassy_rp::interrupt::typelevel::Binding;
 use embassy_rp::pio::{Common, Instance, InterruptHandler, Pin, Pio, PioPin};
@@ -77,6 +78,12 @@ pub struct Bus<'a, PIO: UsbPioInstance> {
 
     /// Saturating attach/detach debounce accumulator.
     debounce: u32,
+
+    /// Running SOF frame counter (11-bit), advanced by [`Self::sof`].
+    frame: u16,
+
+    /// Transmit driver for sending packets on the bus.
+    tx: TxDriver<'a, PIO>,
 }
 
 impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
@@ -104,7 +111,11 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
 
         // All three USB state machines on the chosen PIO: TX = sm0, detector = sm1,
         // decoder = sm2.
-        let Pio { mut common, .. } = Pio::new(pio, irq0);
+        let Pio {
+            mut common,
+            sm0: tx_sm,
+            ..
+        } = Pio::new(pio, irq0);
 
         // Convert GPIO peripherals into PIO-owned pins before configuring pads.
         let mut dp = common.make_pio_pin(dp);
@@ -124,7 +135,9 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         crate::chip::set_gpio_input_inversion(dpn, true);
         crate::chip::set_gpio_input_inversion(dmn, true);
 
-        crate::chip::configure_pio_gpio_base::<PIO>(dpn, dmn);
+        let gpio_high_window = crate::chip::configure_pio_gpio_base::<PIO>(dpn, dmn);
+
+        let tx = TxDriver::init(&mut common, tx_sm, &dp, &dm, gpio_high_window);
 
         Self {
             _common: common,
@@ -133,6 +146,8 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
             speed: Speed::Full,
             attached: false,
             debounce: 0,
+            frame: 0,
+            tx,
         }
     }
 
@@ -153,8 +168,38 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         }
     }
 
+    fn set_speed(&mut self, speed: Speed) {
+        self.speed = speed;
+        self.tx.set_speed(speed);
+    }
+
+    /// Drive a single SOF frame (keep-alive). Advances the internal frame counter.
+    fn sof(&mut self) {
+        let sof = crate::encoding::build_sof(self.frame);
+        self.tx.transmit(&sof);
+        self.frame = self.frame.wrapping_add(1) & 0x7ff;
+    }
+
+    /// Low-speed keep-alive: send a single low-speed **EOP** via the TX player. Encoding
+    /// an empty payload yields just `[SE0, COMP]`, so the player drives SE0 for its EOP
+    /// slot — `irq 0 side 0b00 [7]` = 8 SM cycles = **1.33 µs at the LS clock = exactly 2
+    /// LS bit-times** — then releases. A spec-correct keep-alive (USB 2.0 §7.1.7.4 /
+    /// §11.8.4.1); LS devices have no SOF, so this per-frame EOP is what keeps them awake
+    /// and gives them a bus-derived frame timebase.
+    ///
+    /// The precise width matters because reset detection can begin after roughly
+    /// 2.5 µs of SE0 (T_DETRST, USB 2.0 table 7-14). Letting the PIO player time
+    /// the EOP from the low-speed divider keeps it at two bit-times.
+    fn ls_keepalive(&mut self) {
+        self.tx.transmit(&crate::encoding::LS_KEEPALIVE_PACKET);
+    }
+
     fn keepalive(&mut self) {
-        // TODO send a SOF frame for FS or an empty LS frame for LS to keep the bus alive
+        match self.speed {
+            Speed::Full => self.sof(),
+            Speed::Low => self.ls_keepalive(),
+            _ => (), // only FS and LS are supported by the PIO host transport
+        }
     }
 
     /// Sample and debounce the root-port line state once without waiting.
@@ -174,7 +219,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
             && self.debounce >= DEBOUNCE_FRAMES
             && let Some(speed) = speed
         {
-            self.speed = speed;
+            self.set_speed(speed);
             self.attached = true;
 
             return Some(DeviceEvent::Connected(speed));
@@ -182,6 +227,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
 
         if self.attached && self.debounce == 0 && speed.is_none() {
             self.attached = false;
+            self.tx.release_bus();
             return Some(DeviceEvent::Disconnected);
         }
 
@@ -194,8 +240,9 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
     }
 
     async fn bus_reset(&mut self) {
-        // TODO set Se0
+        self.tx.drive_reset_se0();
         Timer::after(Duration::from_micros(RESET_SE0_US)).await;
+        self.tx.release_reset();
 
         for _ in 0..RESET_RECOVERY_FRAMES {
             self.keepalive();

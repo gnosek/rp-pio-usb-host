@@ -1155,6 +1155,8 @@ dependencies = [
  "embassy-rp",
  "embassy-time",
  "embassy-usb-driver",
+ "fixed",
+ "pio",
  "rp-pac",
 ]
 
