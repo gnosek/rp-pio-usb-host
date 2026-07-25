@@ -14,11 +14,11 @@ use embassy_rp::pio::{Instance, InterruptHandler, PioPin};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::{Mutex, MutexGuard};
 use embassy_time::{Duration, Instant, Timer};
-use embassy_usb_driver::EndpointInfo;
 use embassy_usb_driver::host::{
     DeviceEvent, HostError, PipeError, SplitInfo, TimeoutConfig, UsbHostAllocator,
     UsbHostController, UsbPipe, pipe,
 };
+use embassy_usb_driver::{EndpointInfo, EndpointType};
 
 const FRAME_INTERVAL_US: u32 = 1000; // 1 ms
 
@@ -284,6 +284,17 @@ impl<'a, 'd: 'a, PIO: UsbPioInstance> UsbHostAllocator<'a> for PioUsbAllocator<'
             return Err(HostError::Other(
                 "split transactions (LS-via-hub PRE / HS TT) unsupported",
             ));
+        }
+        if endpoint.ep_type != T::ep_type() {
+            return Err(HostError::Other("pipe and endpoint types do not match"));
+        }
+        if endpoint.ep_type == EndpointType::Isochronous {
+            return Err(HostError::Other("isochronous endpoints unsupported"));
+        }
+        if endpoint.max_packet_size == 0
+            || usize::from(endpoint.max_packet_size) > crate::encoding::MAX_DATA_PAYLOAD_BYTES
+        {
+            return Err(HostError::Other("unsupported endpoint maximum packet size"));
         }
         Ok(PioPipe {
             shared: self.shared,
