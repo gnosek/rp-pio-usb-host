@@ -5,6 +5,7 @@
 //! bulk, and interrupt transfers on top of these primitives.
 
 use crate::pio_instance::UsbPioInstance;
+use crate::ram::now_us;
 use crate::tx_driver::TxDriver;
 use embassy_rp::Peri;
 use embassy_rp::interrupt::typelevel::Binding;
@@ -82,6 +83,20 @@ pub struct Bus<'a, PIO: UsbPioInstance> {
     /// Running SOF frame counter (11-bit), advanced by [`Self::sof`].
     frame: u16,
 
+    /// Timestamp of the last packet put on the bus, in microseconds from [`now_us`].
+    ///
+    /// For LS devices, keepalives are sent 1 ms after the last bus activity
+    /// (the deadline is 3 ms so we try to keep comfortable headroom).
+    /// This is updated by [`Self::mark_activity`] from every TX path, including
+    /// keep-alive itself.
+    last_activity: u32,
+
+    /// Timestamp of the last SOF packet sent, in microseconds from [`now_us`].
+    ///
+    /// For FS devices, we need to send one SOF frame every millisecond,
+    /// *if* the bus is not busy at the moment.
+    last_sof: u32,
+
     /// Transmit driver for sending packets on the bus.
     tx: TxDriver<'a, PIO>,
 }
@@ -139,6 +154,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
 
         let tx = TxDriver::init(&mut common, tx_sm, &dp, &dm, gpio_high_window);
 
+        let now = now_us();
         Self {
             _common: common,
             dp,
@@ -147,6 +163,8 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
             attached: false,
             debounce: 0,
             frame: 0,
+            last_activity: now,
+            last_sof: now,
             tx,
         }
     }
@@ -175,6 +193,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
 
     /// Drive a single SOF frame (keep-alive). Advances the internal frame counter.
     fn sof(&mut self) {
+        self.last_sof = now_us();
         let sof = crate::encoding::build_sof(self.frame);
         self.tx.transmit(&sof);
         self.frame = self.frame.wrapping_add(1) & 0x7ff;
@@ -191,13 +210,26 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
     /// 2.5 µs of SE0 (T_DETRST, USB 2.0 table 7-14). Letting the PIO player time
     /// the EOP from the low-speed divider keeps it at two bit-times.
     fn ls_keepalive(&mut self) {
+        self.mark_activity();
         self.tx.transmit(&crate::encoding::LS_KEEPALIVE_PACKET);
     }
 
     fn keepalive(&mut self) {
+        if !self.attached {
+            return;
+        }
+
         match self.speed {
-            Speed::Full => self.sof(),
-            Speed::Low => self.ls_keepalive(),
+            Speed::Full => {
+                if now_us().wrapping_sub(self.last_sof) >= FRAME_INTERVAL_US {
+                    self.sof()
+                }
+            }
+            Speed::Low => {
+                if now_us().wrapping_sub(self.last_activity) >= FRAME_INTERVAL_US {
+                    self.ls_keepalive()
+                }
+            }
             _ => (), // only FS and LS are supported by the PIO host transport
         }
     }
@@ -269,5 +301,16 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
                 }
             }
         }
+    }
+
+    /// Record that a packet was just transmitted.
+    ///
+    /// Any bus activity — SOF, keep-alive, or a transaction's token/DATA — resets
+    /// the attached device's 3 ms suspend timer (USB 2.0 §7.1.7.6), so every TX
+    /// path stamps this. Uses the RAM-safe [`now_us`] helper because it can run
+    /// at transaction boundaries.
+    #[inline(always)]
+    fn mark_activity(&mut self) {
+        self.last_activity = now_us();
     }
 }
