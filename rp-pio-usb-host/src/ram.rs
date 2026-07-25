@@ -79,3 +79,13 @@ pub(crate) fn pio_sm_exec_instr<PIO: UsbPioInstance, const SM: usize>(instr: u16
 pub(crate) fn pio_sm_push_tx<PIO: UsbPioInstance, const SM: usize>(value: u32) {
     PIO::REGS.txf(SM).write_value(value);
 }
+
+/// RAM-only replacement for `StateMachineRx::try_pull`.
+#[inline(always)]
+pub(crate) fn pio_sm_try_pull_rx<PIO: UsbPioInstance, const SM: usize>() -> Option<u32> {
+    if PIO::REGS.fstat().read().rxempty() & (1u8 << SM) != 0 {
+        None
+    } else {
+        Some(PIO::REGS.rxf(SM).read())
+    }
+}

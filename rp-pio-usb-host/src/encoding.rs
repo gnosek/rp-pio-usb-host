@@ -1,4 +1,20 @@
-use crate::crc::calc_crc5;
+use crate::crc::{calc_crc5, calc_crc16};
+
+/// Maximum DATA payload handled by this host for control, bulk, and interrupt endpoints.
+///
+/// Low-/full-speed endpoint maximum packet sizes for the transfer types this
+/// crate implements are at most 64 bytes (USB 2.0 chapters 5.5, 5.7, and 5.8).
+pub(crate) const MAX_DATA_PAYLOAD_BYTES: usize = 64;
+/// Maximum raw packet buffer: SYNC, PID, DATA payload, and CRC16.
+pub(crate) const MAX_DATA_PACKET_BYTES: usize = MAX_DATA_PAYLOAD_BYTES + 4;
+/// Worst-case encoded symbol bytes for a 64-byte DATA packet.
+///
+/// Bit stuffing inserts at most one bit after every six consecutive one bits
+/// (USB 2.0 §7.1.9). This bound covers SYNC/PID/payload/CRC16 plus EOP and idle
+/// padding.
+pub(crate) const MAX_ENCODED_PACKET_BYTES: usize = 160;
+/// FIFO words required by [`MAX_ENCODED_PACKET_BYTES`].
+pub(crate) const MAX_DATA_PACKET_WORDS: usize = 40;
 
 /// 2-bit TX symbols = `out pc` jump targets into the `usb_tx` player
 /// (`usb_tx.pio`): SE0=0, idle-J=1, COMP=2, K=3.
@@ -115,6 +131,9 @@ fn encode<const N: usize>(pkt: &[u8], scratch: &mut [u8; N], words: &mut [u32]) 
     repack_for_fifo(&scratch[..n], words)
 }
 
+/// FIFO-ready encoding of `[SYNC, ACK]`.
+pub(crate) const ACK_PACKET: [u32; 2] = [0xdddf5d7f, 0x25555555];
+
 /// FIFO-ready low-speed keep-alive packet.
 ///
 /// The empty packet encodes to the EOP sequence plus idle padding; at the
@@ -144,4 +163,68 @@ pub(crate) fn build_sof(frame: u16) -> [u32; 3] {
     };
     debug_assert_eq!(n, words.len());
     words
+}
+
+/// Build a FIFO-ready token packet.
+///
+/// `pid` is IN, OUT, or SETUP; `addr` is the 7-bit device address and `ep` the
+/// 4-bit endpoint number. Token packet format is defined in USB 2.0 §8.4.1.
+///
+/// Token packets encode to 9 or 10 symbol-bytes after bit-stuffing, so they
+/// always fit in exactly 3 FIFO words.
+pub(crate) fn build_token(pid: u8, addr: u8, ep: u8) -> [u32; 3] {
+    let dat: u16 = (((ep & 0x0f) as u16) << 7) | (addr & 0x7f) as u16;
+    let crc5 = calc_crc5(dat);
+    let pkt = [
+        crate::pid::USB_SYNC,
+        pid,
+        (dat & 0xff) as u8,
+        (crc5 << 3) | (((dat >> 8) & 0x1f) as u8),
+    ];
+    let mut scratch = [0u8; 12];
+    let mut words = [0x55555555u32; 3];
+    let n = match encode(&pkt, &mut scratch, &mut words) {
+        Some(n) => n,
+        None => unreachable!("token packet fits fixed TX buffers"),
+    };
+    debug_assert_eq!(n, words.len());
+    words
+}
+
+/// Build the raw `[SYNC, DATAx, payload, CRC16]` packet before line encoding.
+fn build_data_packet(pid: u8, payload: &[u8], out: &mut [u8]) -> Option<usize> {
+    if payload.len() > MAX_DATA_PAYLOAD_BYTES || out.len() < payload.len() + 4 {
+        return None;
+    }
+    out[0] = crate::pid::USB_SYNC;
+    out[1] = pid;
+    let mut len = 2;
+    for &b in payload {
+        out[len] = b;
+        len += 1;
+    }
+    let crc = calc_crc16(payload);
+    out[len] = (crc & 0xff) as u8;
+    out[len + 1] = (crc >> 8) as u8;
+    Some(len + 2)
+}
+
+/// Build a FIFO-ready DATA0/DATA1 packet into `words`.
+///
+/// DATA packet format and CRC16 placement are defined in USB 2.0 §8.4.4 and
+/// §8.3.5. `pid` must be `USB_PID_DATA0` or `USB_PID_DATA1`.
+///
+/// `packet` must be at least `payload.len() + 4` bytes. `scratch` must be large
+/// enough for the encoded symbol bytes, and `words` must be large enough for the
+/// FIFO words. Returns the initialized part of `words`.
+pub(crate) fn build_data<'w, const N: usize>(
+    pid: u8,
+    payload: &[u8],
+    packet: &mut [u8],
+    scratch: &mut [u8; N],
+    words: &'w mut [u32],
+) -> Option<&'w [u32]> {
+    let n = build_data_packet(pid, payload, packet)?;
+    let n = encode(&packet[..n], scratch, words)?;
+    Some(&words[..n])
 }

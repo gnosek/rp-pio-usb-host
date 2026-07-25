@@ -175,6 +175,15 @@ impl<'a, PIO: UsbPioInstance> TxDriver<'a, PIO> {
         PIO::REGS.irq().write(|w| w.set_irq(IRQ_TX_EOP_BIT));
     }
 
+    /// Preload an ACK handshake and release the bus for a device DATA packet.
+    ///
+    /// Used by the IN receive path so the host ACK can be sent immediately at EOP.
+    #[inline(always)]
+    pub(crate) fn prepare_ack_and_release_bus(&mut self) {
+        self.prepare_tx_packet(&crate::encoding::ACK_PACKET);
+        self.release_bus();
+    }
+
     /// Enable SM0 to start a packet that was already loaded into the FIFO.
     #[inline(always)]
     pub fn start_tx(&mut self) {

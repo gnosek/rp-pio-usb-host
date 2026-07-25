@@ -13,5 +13,7 @@ mod encoding;
 mod pid;
 mod pio_instance;
 mod ram;
+mod rx_driver;
+mod rx_pio;
 mod tx_driver;
 mod tx_pio;

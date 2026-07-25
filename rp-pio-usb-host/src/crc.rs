@@ -7,6 +7,40 @@ pub(crate) const CRC5_TBL: [u8; 32] = [
     0x14, 0x1f, 0x02, 0x09, 0x11, 0x1a, 0x07, 0x0c, 0x1e, 0x15, 0x08, 0x03, 0x1b, 0x10, 0x0d, 0x06,
 ];
 
+/// USB CRC16 residue after processing a valid `payload + appended CRC16`.
+///
+/// The USB CRC16 is the reflected form of the polynomial in USB 2.0 §8.3.5,
+/// seeded with `0xffff`. The RX path updates the running CRC as bytes arrive and
+/// compares against this residue at EOP so no post-packet CRC pass is needed.
+pub(crate) const USB_CRC16_RESIDUE: u16 = 0xB001;
+
+/// USB CRC16 lookup table, generated at compile time.
+///
+/// Kept in RAM because the receive loop indexes it from RAM-resident timing-
+/// critical code while deciding whether to ACK a DATA packet. A table update is
+/// fast enough to run per received byte; a bitwise CRC pass at EOP would delay
+/// the host ACK turnaround.
+#[unsafe(link_section = ".data.ram_func")]
+pub(crate) static CRC16_TBL: [u16; 256] = {
+    let mut tbl = [0u16; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let mut crc = i as u16;
+        let mut j = 0;
+        while j < 8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xA001;
+            } else {
+                crc >>= 1;
+            }
+            j += 1;
+        }
+        tbl[i] = crc;
+        i += 1;
+    }
+    tbl
+};
+
 /// Calculate USB CRC5 over an 11-bit token/SOF value.
 pub(crate) const fn calc_crc5(data: u16) -> u8 {
     let data = data ^ 0x1f;
@@ -16,4 +50,25 @@ pub(crate) const fn calc_crc5(data: u16) -> u8 {
     crc = CRC5_TBL[(lsb ^ crc) as usize];
     crc = CRC5_TBL[(msb ^ crc) as usize];
     crc ^ 0x1f
+}
+
+/// Calculate the USB CRC16 appended to a DATA payload.
+pub(crate) const fn calc_crc16(data: &[u8]) -> u16 {
+    let mut crc: u16 = 0xffff;
+    let mut i = 0;
+    while i < data.len() {
+        let b = data[i];
+        crc = (crc >> 8) ^ CRC16_TBL[((crc ^ b as u16) & 0xff) as usize];
+        i += 1;
+    }
+    crc ^ 0xffff
+}
+
+/// Update a running USB CRC16 remainder with one byte.
+///
+/// Seed with `0xffff` and do not apply the final XOR. This form is used while
+/// receiving a packet so validity is known immediately at EOP.
+#[inline(always)]
+pub(crate) const fn crc16_update(crc: u16, b: u8) -> u16 {
+    (crc >> 8) ^ CRC16_TBL[((crc ^ b as u16) & 0xff) as usize]
 }
