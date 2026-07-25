@@ -44,6 +44,12 @@ const DEBOUNCE_CAP: u32 = 60;
 /// `SET_CONFIGURATION`; retrying the whole transfer too early restarts the request.
 const STATUS_POLL_ATTEMPTS: u32 = 400;
 
+/// Maximum CRC errors tolerated during a STATUS-stage IN poll loop.
+///
+/// A separate budget from NAK retries lets us distinguish a noisy/broken link
+/// (many CRC failures) from a device that is simply busy (many NAKs).
+const STATUS_CRC_ERROR_BUDGET: u32 = 8;
+
 /// `control_in` DATA-stage NAK-poll budget per packet.
 ///
 /// The budget resets after each successfully received packet so a slow multi-packet
@@ -720,18 +726,44 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         // control_out reports Timeout — which a host stack treats as failure). Returns Ok
         // the instant the ZLP arrives, so a fast device/link is unaffected.
         let mut pkt = [0u8; 8];
-        for _ in 0..STATUS_POLL_ATTEMPTS {
+        let mut polls = 0u32;
+        let mut crc_errors = 0u32;
+        let mut got_any_reply = false;
+        while polls < STATUS_POLL_ATTEMPTS && crc_errors < STATUS_CRC_ERROR_BUDGET {
+            polls += 1;
             match self.in_reply(&in_tok, &mut pkt)? {
+                // The USB 2.0 specification (§8.5.3.1) mandates that the STATUS stage
+                // of a control-write transfer uses a DATA1 PID for the zero-length status packet,
+                // but we accept either DATA0 or DATA1 here to accommodate non-compliant devices
+                // that send DATA0.
                 InReply::Data {
-                    valid_crc: true, ..
+                    pid: crate::pid::USB_PID_DATA0 | crate::pid::USB_PID_DATA1,
+                    valid_crc: true,
+                    payload_len: 0,
                 } => return Ok(()),
                 InReply::Data {
                     valid_crc: false, ..
-                } => continue,
-                _ => continue,
+                } => {
+                    got_any_reply = true;
+                    crc_errors += 1;
+                }
+                InReply::Data { .. } => return Err(PipeError::BadResponse),
+                InReply::Nak => {
+                    got_any_reply = true;
+                }
+                InReply::NoReply => {}
+                InReply::Other => {
+                    return Err(PipeError::BadResponse);
+                }
             }
         }
-        Err(PipeError::Timeout)
+        if !got_any_reply {
+            Err(PipeError::Disconnected)
+        } else if crc_errors >= STATUS_CRC_ERROR_BUDGET {
+            Err(PipeError::BadResponse)
+        } else {
+            Err(PipeError::Timeout)
+        }
     }
 
     /// Single nonblocking step of a bulk/interrupt IN transfer.
