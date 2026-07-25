@@ -20,6 +20,9 @@ const IRQ_TX_EOP_BIT: u8 = 1 << 0;
 /// for a full-size LS packet.
 const TX_WAIT_TIMEOUT_US: u32 = 50;
 
+/// TX FIFO capacity when the state machine uses [`FifoJoin::TxOnly`].
+const TX_FIFO_DEPTH: usize = 8;
+
 /// PIO `exec` instruction: drive D+/D- as outputs.
 const SET_PINDIRS_OUT: u16 = 0xE083; // set pindirs, 0b11 (both outputs)
 /// PIO `exec` instruction: drive SE0 (`D+ = D- = 0`).
@@ -157,13 +160,14 @@ impl<'a, PIO: UsbPioInstance> TxDriver<'a, PIO> {
         ram::pio_sm_exec_instr::<PIO, 0>(SET_PINDIRS_IN);
     }
 
-    /// Load a pre-encoded packet into the TX FIFO without starting SM0.
+    /// Load the initial words of a pre-encoded packet without starting SM0.
     ///
-    /// The returned [`TxPacket`] can be started later with a single enable write.
-    /// This function is called from RAM-resident paths and therefore only uses
-    /// crate-local `#[inline(always)]` PAC helpers.
+    /// `words` must fit in the joined eight-word TX FIFO. This function is called
+    /// from RAM-resident paths and therefore only uses crate-local
+    /// `#[inline(always)]` PAC helpers.
     #[inline(always)]
     fn prepare_tx_packet(&mut self, words: &[u32]) {
+        debug_assert!(words.len() <= TX_FIFO_DEPTH);
         let start_instr = self.tx_start_instr;
         ram::pio_sm_disable::<PIO, 0>();
         ram::pio_sm_clear_fifos::<PIO, 0>();
@@ -211,8 +215,21 @@ impl<'a, PIO: UsbPioInstance> TxDriver<'a, PIO> {
     #[unsafe(link_section = ".data.ram_func")]
     #[inline(never)]
     pub fn transmit(&mut self, words: &[u32]) {
-        self.prepare_tx_packet(words);
-        self.start_tx();
+        let (initial, remaining) = words.split_at(words.len().min(TX_FIFO_DEPTH));
+        self.prepare_tx_packet(initial);
+        if remaining.is_empty() {
+            self.start_tx();
+        } else {
+            // Once SM0 starts, prevent a long interrupt from draining the FIFO
+            // before software has queued the rest of the packet.
+            critical_section::with(|_| {
+                self.start_tx();
+                for word in remaining {
+                    while ram::pio_sm_tx_full::<PIO, 0>() {}
+                    ram::pio_sm_push_tx::<PIO, 0>(*word);
+                }
+            });
+        }
         self.wait();
     }
 }

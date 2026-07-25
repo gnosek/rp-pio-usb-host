@@ -1271,6 +1271,7 @@ dependencies = [
 name = "rp-pio-usb-host"
 version = "0.1.0"
 dependencies = [
+ "critical-section",
  "embassy-rp",
  "embassy-sync",
  "embassy-time",

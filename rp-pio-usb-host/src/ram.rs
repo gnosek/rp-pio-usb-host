@@ -80,6 +80,12 @@ pub(crate) fn pio_sm_push_tx<PIO: UsbPioInstance, const SM: usize>(value: u32) {
     PIO::REGS.txf(SM).write_value(value);
 }
 
+/// Test whether a PIO state machine's TX FIFO is full.
+#[inline(always)]
+pub(crate) fn pio_sm_tx_full<PIO: UsbPioInstance, const SM: usize>() -> bool {
+    PIO::REGS.fstat().read().txfull() & (1u8 << SM) != 0
+}
+
 /// RAM-only replacement for `StateMachineRx::try_pull`.
 #[inline(always)]
 pub(crate) fn pio_sm_try_pull_rx<PIO: UsbPioInstance, const SM: usize>() -> Option<u32> {
