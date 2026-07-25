@@ -113,6 +113,31 @@ pub struct PioPipe<'a, 'd, T: pipe::Type, D: pipe::Direction, PIO: UsbPioInstanc
     _markers: PhantomData<(T, D)>,
 }
 
+fn needs_terminating_zlp(len: usize, mps: usize, ensure_transaction_end: bool) -> bool {
+    ensure_transaction_end && len != 0 && len.is_multiple_of(mps)
+}
+
+impl<'a, 'd: 'a, T: pipe::Type, D: pipe::Direction, PIO: UsbPioInstance>
+    PioPipe<'a, 'd, T, D, PIO>
+{
+    /// Send one OUT packet, retrying NAK/no-response until cancellation.
+    async fn request_out_packet(&mut self, data: &[u8]) -> Result<(), PipeError> {
+        loop {
+            let res = {
+                let mut bus = self.shared.bus.lock().await;
+                bus.request_out(self.addr, self.ep, data, &mut self.toggle_data1)
+            };
+
+            match res {
+                Err(PipeError::Timeout) => {
+                    Timer::after(Duration::from_micros(self.interval_us as u64)).await;
+                }
+                _ => return res,
+            }
+        }
+    }
+}
+
 impl<'a, 'd: 'a, T: pipe::Type, D: pipe::Direction, PIO: UsbPioInstance> UsbPipe<T, D>
     for PioPipe<'a, 'd, T, D, PIO>
 {
@@ -194,26 +219,19 @@ impl<'a, 'd: 'a, T: pipe::Type, D: pipe::Direction, PIO: UsbPioInstance> UsbPipe
     async fn request_out(
         &mut self,
         buf: &[u8],
-        _ensure_transaction_end: bool,
+        ensure_transaction_end: bool,
     ) -> Result<(), PipeError>
     where
         D: pipe::IsOut,
     {
-        // Interrupt/bulk OUT, single packet. NAK means device busy; retry until
-        // the request future is dropped.
-        loop {
-            let res = {
-                let mut bus = self.shared.bus.lock().await;
-                bus.request_out(self.addr, self.ep, buf, &mut self.toggle_data1)
-            };
-
-            match res {
-                Err(PipeError::Timeout) => {
-                    Timer::after(Duration::from_micros(self.interval_us as u64)).await;
-                }
-                _ => return res,
-            }
+        let mps = usize::from(self.mps);
+        for chunk in buf.chunks(mps) {
+            self.request_out_packet(chunk).await?;
         }
+        if buf.is_empty() || needs_terminating_zlp(buf.len(), mps, ensure_transaction_end) {
+            self.request_out_packet(&[]).await?;
+        }
+        Ok(())
     }
 
     fn set_timeout(&mut self, timeout: TimeoutConfig)
