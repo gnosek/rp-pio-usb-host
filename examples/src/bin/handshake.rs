@@ -9,10 +9,13 @@ use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::InterruptHandler;
+use embassy_time::{Duration, Timer};
 use embassy_usb_driver::host::{DeviceEvent, PipeError};
 use embassy_usb_host::descriptor::{DeviceDescriptor, DeviceDescriptorPartial, USBDescriptor};
 use rp_pio_usb_host::bus::Pulldown;
+use rp_pio_usb_host::embassy::Bus;
 use rp_pio_usb_host::pio_instance::UsbPioInstance;
+use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
@@ -98,6 +101,7 @@ fn show_device_descriptor<PIO: UsbPioInstance>(
                 error!("failed to decode device descriptor");
                 return Err(PipeError::Stall);
             }
+            Err(PipeError::Timeout) => continue,
             Err(e) => {
                 error!("error getting device descriptor: {:?}", e);
                 return Err(e);
@@ -114,7 +118,14 @@ fn get_device_config<PIO: UsbPioInstance>(
     debug!("getting initial configuration descriptor",);
     let get_config = embassy_usb_host::control::SetupPacket::get_config_descriptor(0, 9);
     let mut buf = [0u8; 256];
-    let len = bus.control_in(0, 0, mps, &get_config.to_bytes(), &mut buf)?;
+
+    let len = loop {
+        match bus.control_in(0, 0, mps, &get_config.to_bytes(), &mut buf) {
+            Ok(len) => break len,
+            Err(PipeError::Timeout) => continue,
+            Err(e) => return Err(e),
+        };
+    };
 
     debug!(
         "raw configuration descriptor: {:x}",
@@ -147,7 +158,14 @@ fn get_all_device_configs<PIO: UsbPioInstance>(
     );
     let get_config = embassy_usb_host::control::SetupPacket::get_config_descriptor(0, max_len);
     let mut buf = [0u8; 256];
-    let len = bus.control_in(0, 0, mps, &get_config.to_bytes(), &mut buf)?;
+
+    let len = loop {
+        match bus.control_in(0, 0, mps, &get_config.to_bytes(), &mut buf) {
+            Ok(len) => break len,
+            Err(PipeError::Timeout) => continue,
+            Err(e) => return Err(e),
+        };
+    };
 
     debug!(
         "raw configuration descriptor: {:x}",
@@ -172,16 +190,26 @@ fn get_all_device_configs<PIO: UsbPioInstance>(
     }
 }
 
+#[embassy_executor::task]
+async fn usb_idle_task(bus: &'static Bus<'static, PIO0>) {
+    bus.idle_task().await;
+}
+
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
     let mut led = Output::new(p.PIN_25, Level::Low);
 
     info!("waiting for device");
-    let mut bus =
-        rp_pio_usb_host::bus::Bus::new(p.PIO0, p.PIN_0, p.PIN_1, Irqs, Pulldown::External);
+    static BUS: StaticCell<Bus<PIO0>> = StaticCell::new();
+    let bus = BUS.init(Bus::new(p.PIO0, p.PIN_0, p.PIN_1, Irqs, Pulldown::External));
+    spawner.spawn(usb_idle_task(bus).unwrap());
+
     loop {
-        let event = bus.wait_for_device_event().await;
+        let event = {
+            let mut bus = bus.lock().await;
+            bus.wait_for_device_event().await
+        };
         info!("device event: {:?}", event);
 
         match event {
@@ -195,16 +223,30 @@ async fn main(_spawner: Spawner) {
             _ => (),
         }
 
-        let mps = match show_device_descriptor(&mut bus) {
-            Ok(mps) => mps,
-            Err(_) => continue,
-        };
+        {
+            let mut bus = bus.lock().await;
+            let mps = match show_device_descriptor(&mut bus) {
+                Ok(mps) => mps,
+                Err(_) => continue,
+            };
 
-        let config_max_len = match get_device_config(&mut bus, mps) {
-            Ok(len) => len,
-            Err(_) => continue,
-        };
+            let config_max_len = match get_device_config(&mut bus, mps) {
+                Ok(len) => len,
+                Err(_) => continue,
+            };
 
-        get_all_device_configs(&mut bus, mps, config_max_len).ok();
+            get_all_device_configs(&mut bus, mps, config_max_len).ok();
+        }
+
+        loop {
+            {
+                let bus = bus.lock().await;
+                if !bus.device_present() {
+                    info!("device disconnected");
+                    break;
+                }
+            }
+            Timer::after(Duration::from_millis(1000)).await;
+        }
     }
 }

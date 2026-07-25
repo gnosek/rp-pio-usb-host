@@ -272,7 +272,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         self.mark_activity();
     }
 
-    fn keepalive(&mut self) {
+    pub(crate) fn keepalive(&mut self) {
         if !self.attached {
             return;
         }
@@ -325,7 +325,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
     }
 
     #[inline(always)]
-    async fn wait_for_next_frame() {
+    pub(crate) async fn wait_for_next_frame() {
         Timer::after_micros(FRAME_INTERVAL_US as u64).await;
     }
 
@@ -359,6 +359,11 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
                 }
             }
         }
+    }
+
+    /// Return whether the root port currently has a debounced attached device.
+    pub fn device_present(&self) -> bool {
+        self.attached
     }
 
     /// Record that a packet was just transmitted.
@@ -510,8 +515,6 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
 
     /// Send the SETUP token and DATA0 setup packet, expecting an ACK handshake.
     fn control_setup(&mut self, addr: u8, ep: u8, setup: &[u8; 8]) -> Result<(), PipeError> {
-        self.keepalive();
-
         let setup_tok = crate::encoding::build_token(crate::pid::USB_PID_SETUP, addr, ep);
         let mut data0 = [0u8; crate::encoding::MAX_DATA_PACKET_BYTES];
         let mut data_w = [0u32; crate::encoding::MAX_DATA_PACKET_WORDS];
@@ -544,7 +547,6 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         setup: &[u8; 8],
         data: &mut [u8],
     ) -> Result<usize, PipeError> {
-        self.keepalive();
         // wLength from the SETUP request: the data stage also ends once this many bytes
         // are received (not only on a short packet) — essential when the configured `mps`
         // doesn't match the device's real mps0 (e.g. the bootstrap device-descriptor read

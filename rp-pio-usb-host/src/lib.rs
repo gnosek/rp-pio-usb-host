@@ -9,6 +9,7 @@ pub mod bus;
 mod chip;
 mod clock;
 mod crc;
+pub mod embassy;
 mod encoding;
 mod pid;
 pub mod pio_instance;
