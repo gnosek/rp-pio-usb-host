@@ -1,5 +1,5 @@
 [workspace]
-members = ["examples/rp2040","rp-pio-usb-host"]
+members = ["examples/rp2040","examples/rp235xa","rp-pio-usb-host"]
 resolver = "3"
 
 [profile.release]
