@@ -23,8 +23,12 @@ authors.
 
 ## Required resources
 
-To add a USB host to your RP2040 or RP235x project, you will need:
-* Two **consecutive** GPIO pins for the USB D+ and D- lines.
+To add a USB host to your project, you will need:
+* A RP2040 or RP235x microcontroller. **Note**: tested with Raspberry Pi Pico, and Pico 2. Other boards should work but
+  are untested, in particular RP235xB-based boards (with over 32 GPIOs) were not tested. If you do have a RP235xB board,
+  I'd appreciate feedback (both positive and negative).
+* Two **consecutive** GPIO pins for the USB D+ and D- lines. Tested in the "D+ is the lower pin" configuration, but
+  the other way around should work too. Please file an issue if it does not.
 * One full PIO block dedicated to the USB host driver. The driver uses 3 state machines and all 32 instructions 
   of the PIO program memory.
 * At least 96 MHz of system clock speed. The USB host driver determines the PIO clock divisor automatically based
