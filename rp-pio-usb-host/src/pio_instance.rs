@@ -8,8 +8,7 @@ use rp_pac as pac;
 /// sealed). Implemented for `PIO0`/`PIO1` (and `PIO2` on RP2350); the `REGS`
 /// const inlines to a constant MMIO base, so the RAM-resident hot paths take no
 /// flash to reach it. Select the block through the PIO peripheral passed to
-/// [`crate::bus::Bus::new`].
-#[doc(hidden)]
+/// [`crate::embassy::Bus::new`].
 pub trait UsbPioInstance: Instance {
     /// The PIO block's register base (e.g. `pac::PIO0`).
     const REGS: pac::pio::Pio;

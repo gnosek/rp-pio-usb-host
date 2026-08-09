@@ -13,7 +13,7 @@ use embassy_rp::interrupt::typelevel::Binding;
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::{Instance, InterruptHandler, PioPin};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::mutex::{Mutex, MutexGuard};
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Instant, Timer};
 use embassy_usb_driver::host::{
     DeviceEvent, HostError, PipeError, SplitInfo, TimeoutConfig, UsbHostAllocator,
@@ -31,19 +31,11 @@ const FRAME_INTERVAL_US: u32 = 1000; // 1 ms
 pub struct Bus<'d, PIO: UsbPioInstance = PIO0> {
     /// The single physical bus shared by the controller and all allocated pipes.
     bus: Mutex<CriticalSectionRawMutex, PioUsbBus<'d, PIO>>,
-    
+
     frame_counter: FrameCounter,
 }
 
 impl<'d, PIO: UsbPioInstance> Bus<'d, PIO> {
-    /// Wrap a freshly-constructed [`Bus`] for sharing.
-    pub fn from_bus(bus: PioUsbBus<'d, PIO>) -> Self {
-        Self {
-            bus: Mutex::new(bus),
-            frame_counter: FrameCounter::new(),
-        }
-    }
-
     /// Construct a shared async bus from the raw PIO peripheral, USB pins, and IRQ binding.
     pub fn new<Irq0>(
         pio: Peri<'d, PIO>,
@@ -56,7 +48,10 @@ impl<'d, PIO: UsbPioInstance> Bus<'d, PIO> {
         Irq0: Binding<<PIO as Instance>::Interrupt, InterruptHandler<PIO>>,
     {
         let bus = PioUsbBus::new(pio, dp, dm, irq0, pulldown);
-        Self::from_bus(bus)
+        Self {
+            bus: Mutex::new(bus),
+            frame_counter: FrameCounter::new(),
+        }
     }
 
     /// Obtain the root-port controller handle.
@@ -86,14 +81,6 @@ impl<'d, PIO: UsbPioInstance> Bus<'d, PIO> {
             self.tick();
             PioUsbBus::<PIO>::wait_for_next_frame().await;
         }
-    }
-
-    /// Lock and expose the underlying direct bus.
-    ///
-    /// Most callers should use [`Self::controller`] instead; this is intended for code
-    /// that needs direct access to the root-port primitives.
-    pub async fn lock(&'d self) -> MutexGuard<'d, CriticalSectionRawMutex, PioUsbBus<'d, PIO>> {
-        self.bus.lock().await
     }
 }
 

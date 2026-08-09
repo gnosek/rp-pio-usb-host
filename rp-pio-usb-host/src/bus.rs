@@ -342,32 +342,6 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         }
     }
 
-    /// Wait until the debounced root port reports a connection or disconnection.
-    ///
-    /// On connection this also performs USB reset and reset recovery before returning
-    /// the event, so callers can begin enumeration immediately.
-    pub async fn wait_for_device_event(&mut self, frame_counter: &FrameCounter) -> DeviceEvent {
-        loop {
-            match self.poll_device_event() {
-                Some(ev @ DeviceEvent::Connected(_)) => {
-                    self.bus_reset(frame_counter).await;
-                    return ev;
-                }
-                Some(ev) => {
-                    return ev;
-                }
-                None => {
-                    Self::wait_for_next_frame().await;
-                }
-            }
-        }
-    }
-
-    /// Return whether the root port currently has a debounced attached device.
-    pub fn device_present(&self) -> bool {
-        self.attached
-    }
-
     /// Record that a packet was just transmitted.
     ///
     /// Any bus activity — SOF, keep-alive, or a transaction's token/DATA — resets
@@ -582,7 +556,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
     /// Sends SETUP, polls IN packets until the requested length or a short packet is
     /// received, ACKs each valid DATA packet, then completes the status OUT stage.
     /// Returns the number of payload bytes copied into `data`.
-    pub fn control_in(
+    pub(crate) fn control_in(
         &mut self,
         addr: u8,
         ep: u8,
@@ -676,7 +650,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
     /// The data stage starts on the **DATA1** toggle and is split into `mps`-sized packets;
     /// each is retried on NAK. The control STATUS stage of a write is always an **IN**
     /// (device returns a ZLP), regardless of whether there was an OUT data stage.
-    pub fn control_out(
+    pub(crate) fn control_out(
         &mut self,
         addr: u8,
         ep: u8,

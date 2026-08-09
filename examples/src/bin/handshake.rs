@@ -9,17 +9,16 @@ use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::InterruptHandler;
-use embassy_time::{Duration, Timer};
 use embassy_usb_driver::host::{
     DeviceEvent, HostError, PipeError, TimeoutConfig, UsbHostAllocator, UsbHostController,
 };
 use embassy_usb_driver::host::{UsbPipe, pipe};
 use embassy_usb_driver::{EndpointAddress, EndpointInfo, EndpointType};
 use embassy_usb_host::descriptor::{
-    ConfigurationDescriptorChain, DeviceDescriptor, DeviceDescriptorPartial, USBDescriptor,
+    ConfigurationDescriptor, DeviceDescriptor, DeviceDescriptorPartial, USBDescriptor,
 };
-use rp_pio_usb_host::bus::Pulldown;
-use rp_pio_usb_host::embassy::Bus;
+use rp_pio_usb_host::Bus;
+use rp_pio_usb_host::Pulldown;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -30,19 +29,13 @@ bind_interrupts!(struct Irqs {
 #[derive(defmt::Format)]
 enum DescriptorError {
     Pipe(PipeError),
-    Decode(embassy_usb_host::descriptor::DescriptorError),
+    Decode,
     Host(HostError),
 }
 
 impl From<PipeError> for DescriptorError {
     fn from(err: PipeError) -> Self {
         DescriptorError::Pipe(err)
-    }
-}
-
-impl From<embassy_usb_host::descriptor::DescriptorError> for DescriptorError {
-    fn from(err: embassy_usb_host::descriptor::DescriptorError) -> Self {
-        DescriptorError::Decode(err)
     }
 }
 
@@ -75,7 +68,10 @@ async fn get_partial_device_descriptor(
     pipe.set_timeout(TimeoutConfig::default());
     let len = pipe.control_in(&get_device.to_bytes(), &mut pdd).await?;
 
-    Ok(DeviceDescriptorPartial::try_from_bytes(&pdd[..len])?)
+    Ok(
+        DeviceDescriptorPartial::try_from_bytes(&pdd[..len])
+            .map_err(|_| DescriptorError::Decode)?,
+    )
 }
 
 async fn get_full_device_descriptor(
@@ -89,7 +85,7 @@ async fn get_full_device_descriptor(
     pipe.set_timeout(TimeoutConfig::default());
     let len = pipe.control_in(&get_device.to_bytes(), &mut pdd).await?;
 
-    Ok(DeviceDescriptor::try_from_bytes(&pdd[..len])?)
+    Ok(DeviceDescriptor::try_from_bytes(&pdd[..len]).map_err(|_| DescriptorError::Decode)?)
 }
 
 async fn show_device_descriptor(
@@ -138,10 +134,9 @@ async fn get_device_config_len(
         Debug2Format(&buf[..len])
     );
 
-    Ok(
-        embassy_usb_host::descriptor::ConfigurationDescriptor::try_from_bytes(&buf[..len])?
-            .total_len,
-    )
+    Ok(ConfigurationDescriptor::try_from_bytes(&buf[..len])
+        .map_err(|_| DescriptorError::Decode)?
+        .total_len)
 }
 
 async fn show_all_device_configs(
@@ -163,8 +158,10 @@ async fn show_all_device_configs(
         Debug2Format(&buf[..len])
     );
 
-    for desc in ConfigurationDescriptorChain::try_from_slice(&buf[..len])?.iter_interface() {
-        debug!("interface descriptor: {:?}", Debug2Format(&*desc));
+    let desc = ConfigurationDescriptor::try_from_slice(&buf[..len])
+        .map_err(|_| DescriptorError::Decode)?;
+    for iface in desc.iter_interface() {
+        debug!("interface descriptor: {:?}", Debug2Format(&iface));
     }
 
     Ok(())
@@ -223,17 +220,6 @@ async fn main(spawner: Spawner) {
                 error!("error showing all device configs: {:?}", e);
                 continue;
             }
-        }
-
-        loop {
-            {
-                let bus = bus.lock().await;
-                if !bus.device_present() {
-                    info!("device disconnected");
-                    break;
-                }
-            }
-            Timer::after(Duration::from_millis(1000)).await;
         }
     }
 }

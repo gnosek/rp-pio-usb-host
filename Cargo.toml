@@ -7,11 +7,11 @@ debug = 2
 
 [profile.dev]
 opt-level = 1
-
-[patch.crates-io]
-embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7" }
-embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7" }
-embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7" }
-embassy-usb-host = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7" }
+#
+#[patch.crates-io]
+#embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7" }
+#embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7" }
+#embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7" }
+#embassy-time = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7" }
+#embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7" }
+#embassy-usb-host = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7" }

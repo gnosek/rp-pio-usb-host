@@ -9,24 +9,21 @@ publish = false
 name = "handshake"
 path = "../src/bin/handshake.rs"
 test = false
-
-[[bin]]
-name = "link_detect"
-path = "../src/bin/link_detect.rs"
-test = false
+doc = false
 
 [[bin]]
 name = "usb_host_keyboard"
 path = "../src/bin/usb_host_keyboard.rs"
 test = false
+doc = false
 
 [dependencies]
 cortex-m-rt = "0.7.5"
-embassy-rp = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7", features = ["rp235xa", "defmt", "time-driver", "critical-section-impl"] }
-embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7", features = ["defmt", "executor-thread", "platform-cortex-m"] }
+embassy-executor = { version = "0.10.0", features = ["defmt", "executor-thread", "platform-cortex-m"] }
+embassy-usb-host = { version = "0.1.0", features = ["defmt"] }
+embassy-rp = { version = "0.10.0", features = ["defmt", "time-driver", "critical-section-impl"] }
 embassy-time = { version = "0.5.1", features = ["defmt", "defmt-timestamp-uptime"] }
-embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7", features = ["defmt"] }
-embassy-usb-host = { git = "https://github.com/embassy-rs/embassy.git", rev = "e5921a9d3a4a138f724ea40662599ff0fc42e6c7", features = ["defmt"] }
+embassy-usb-driver = { version = "0.2.2", features = ["defmt"] }
 defmt-rtt = "1.3.0"
 panic-probe = "1.0.0"
 defmt = "1.1.1"

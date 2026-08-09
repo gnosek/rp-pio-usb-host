@@ -7,7 +7,7 @@ use embassy_rp::bind_interrupts;
 use embassy_rp::peripherals::PIO0;
 use embassy_usb_host::class::hid::HidHost;
 use embassy_usb_host::{BusRoute, BusState};
-use rp_pio_usb_host::embassy::Bus;
+use rp_pio_usb_host::Bus;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -30,7 +30,7 @@ async fn main(spawner: Spawner) {
         p.PIN_0,
         p.PIN_1,
         Irqs,
-        rp_pio_usb_host::bus::Pulldown::External,
+        rp_pio_usb_host::Pulldown::External,
     ));
     spawner.spawn(usb_idle_task(bus).unwrap());
     let controller = bus.controller();
