@@ -12,6 +12,7 @@ use embassy_rp::pio::InterruptHandler;
 use embassy_usb_driver::host::DeviceEvent;
 use rp_pio_usb_host::bus::Pulldown;
 use {defmt_rtt as _, panic_probe as _};
+use rp_pio_usb_host::frame_counter::FrameCounter;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
@@ -25,7 +26,8 @@ async fn main(_spawner: Spawner) {
     let mut bus =
         rp_pio_usb_host::bus::Bus::new(p.PIO0, p.PIN_0, p.PIN_1, Irqs, Pulldown::External);
     loop {
-        let event = bus.wait_for_device_event().await;
+        let frame_counter = FrameCounter::new();
+        let event = bus.wait_for_device_event(&frame_counter).await;
         info!("device event: {:?}", event);
 
         match event {

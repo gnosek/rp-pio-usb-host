@@ -5,6 +5,7 @@
 //! `embassy-usb-host`.
 
 use crate::bus::{Bus as PioUsbBus, Pulldown};
+use crate::frame_counter::FrameCounter;
 use crate::pio_instance::UsbPioInstance;
 use core::marker::PhantomData;
 use embassy_rp::Peri;
@@ -30,6 +31,8 @@ const FRAME_INTERVAL_US: u32 = 1000; // 1 ms
 pub struct Bus<'d, PIO: UsbPioInstance = PIO0> {
     /// The single physical bus shared by the controller and all allocated pipes.
     bus: Mutex<CriticalSectionRawMutex, PioUsbBus<'d, PIO>>,
+    
+    frame_counter: FrameCounter,
 }
 
 impl<'d, PIO: UsbPioInstance> Bus<'d, PIO> {
@@ -37,6 +40,7 @@ impl<'d, PIO: UsbPioInstance> Bus<'d, PIO> {
     pub fn from_bus(bus: PioUsbBus<'d, PIO>) -> Self {
         Self {
             bus: Mutex::new(bus),
+            frame_counter: FrameCounter::new(),
         }
     }
 
@@ -66,8 +70,9 @@ impl<'d, PIO: UsbPioInstance> Bus<'d, PIO> {
     /// transfer itself provides bus activity. [`Self::idle_task`] calls this once
     /// per frame.
     fn tick(&self) {
+        let frame = self.frame_counter.next();
         if let Ok(mut bus) = self.bus.try_lock() {
-            bus.keepalive();
+            bus.keepalive(frame);
         }
     }
 
@@ -331,7 +336,7 @@ impl<'a, 'd: 'a, PIO: UsbPioInstance> UsbHostController<'a> for PioUsbController
                 let mut bus = self.shared.bus.lock().await;
                 let event = bus.poll_device_event();
                 if matches!(event, Some(DeviceEvent::Connected(_))) {
-                    bus.bus_reset().await;
+                    bus.bus_reset(&self.shared.frame_counter).await;
                 }
                 event
             };
@@ -344,6 +349,6 @@ impl<'a, 'd: 'a, PIO: UsbPioInstance> UsbHostController<'a> for PioUsbController
 
     async fn bus_reset(&mut self) {
         let mut bus = self.shared.bus.lock().await;
-        bus.bus_reset().await
+        bus.bus_reset(&self.shared.frame_counter).await
     }
 }

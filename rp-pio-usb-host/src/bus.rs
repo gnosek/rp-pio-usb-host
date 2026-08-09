@@ -4,6 +4,7 @@
 //! reset, and low-/full-speed keep-alives. Higher-level adapters can build control,
 //! bulk, and interrupt transfers on top of these primitives.
 
+use crate::frame_counter::FrameCounter;
 use crate::pio_instance::UsbPioInstance;
 use crate::ram::now_us;
 use crate::rx_driver::{RxDriver, RxPacketStatus};
@@ -123,9 +124,6 @@ pub struct Bus<'a, PIO: UsbPioInstance> {
     /// Saturating attach/detach debounce accumulator.
     debounce: u32,
 
-    /// Running SOF frame counter (11-bit), advanced by [`Self::sof`].
-    frame: u16,
-
     /// Timestamp of the last packet put on the bus, in microseconds from [`now_us`].
     ///
     /// For LS devices, keepalives are sent 1 ms after the last bus activity
@@ -222,7 +220,6 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
             speed: Speed::Full,
             attached: false,
             debounce: 0,
-            frame: 0,
             last_activity: now,
             last_sof: now,
             enc: [0u8; crate::encoding::MAX_ENCODED_PACKET_BYTES],
@@ -255,11 +252,10 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
     }
 
     /// Drive a single SOF frame (keep-alive). Advances the internal frame counter.
-    fn sof(&mut self) {
+    fn sof(&mut self, frame: u16) {
         self.last_sof = now_us();
-        let sof = crate::encoding::build_sof(self.frame);
+        let sof = crate::encoding::build_sof(frame);
         self.tx.transmit(&sof);
-        self.frame = self.frame.wrapping_add(1) & 0x7ff;
     }
 
     /// Low-speed keep-alive: send a single low-speed **EOP** via the TX player. Encoding
@@ -278,7 +274,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         self.mark_activity();
     }
 
-    pub(crate) fn keepalive(&mut self) {
+    pub(crate) fn keepalive(&mut self, frame: u16) {
         if !self.attached {
             return;
         }
@@ -286,7 +282,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         match self.speed {
             Speed::Full => {
                 if now_us().wrapping_sub(self.last_sof) >= FRAME_INTERVAL_US {
-                    self.sof()
+                    self.sof(frame)
                 }
             }
             Speed::Low => {
@@ -335,13 +331,13 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         Timer::after_micros(FRAME_INTERVAL_US as u64).await;
     }
 
-    pub(crate) async fn bus_reset(&mut self) {
+    pub(crate) async fn bus_reset(&mut self, frame_counter: &FrameCounter) {
         self.tx.drive_reset_se0();
         Timer::after(Duration::from_micros(RESET_SE0_US)).await;
         self.tx.release_reset();
 
         for _ in 0..RESET_RECOVERY_FRAMES {
-            self.keepalive();
+            self.keepalive(frame_counter.next());
             Self::wait_for_next_frame().await;
         }
     }
@@ -350,11 +346,11 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
     ///
     /// On connection this also performs USB reset and reset recovery before returning
     /// the event, so callers can begin enumeration immediately.
-    pub async fn wait_for_device_event(&mut self) -> DeviceEvent {
+    pub async fn wait_for_device_event(&mut self, frame_counter: &FrameCounter) -> DeviceEvent {
         loop {
             match self.poll_device_event() {
                 Some(ev @ DeviceEvent::Connected(_)) => {
-                    self.bus_reset().await;
+                    self.bus_reset(frame_counter).await;
                     return ev;
                 }
                 Some(ev) => {

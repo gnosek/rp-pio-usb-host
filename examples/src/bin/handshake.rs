@@ -10,7 +10,7 @@ use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::InterruptHandler;
 use embassy_time::{Duration, Timer};
-use embassy_usb_driver::host::{DeviceEvent, PipeError};
+use embassy_usb_driver::host::{DeviceEvent, PipeError, UsbHostController};
 use embassy_usb_host::descriptor::{DeviceDescriptor, DeviceDescriptorPartial, USBDescriptor};
 use rp_pio_usb_host::bus::Pulldown;
 use rp_pio_usb_host::embassy::Bus;
@@ -205,11 +205,9 @@ async fn main(spawner: Spawner) {
     let bus = BUS.init(Bus::new(p.PIO0, p.PIN_0, p.PIN_1, Irqs, Pulldown::External));
     spawner.spawn(usb_idle_task(bus).unwrap());
 
+    let mut controller = bus.controller();
     loop {
-        let event = {
-            let mut bus = bus.lock().await;
-            bus.wait_for_device_event().await
-        };
+        let event = controller.wait_for_device_event().await;
         info!("device event: {:?}", event);
 
         match event {
