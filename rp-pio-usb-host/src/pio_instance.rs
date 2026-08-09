@@ -3,12 +3,12 @@
 use embassy_rp::pio::Instance;
 use rp_pac as pac;
 
-/// A PIO block usable by the PIO-USB host transport: an embassy-rp [`Instance`]
-/// plus its concrete [`pac::pio::Pio`] register block (which `Instance` keeps
-/// sealed). Implemented for `PIO0`/`PIO1` (and `PIO2` on RP2350); the `REGS`
-/// const inlines to a constant MMIO base, so the RAM-resident hot paths take no
-/// flash to reach it. Select the block through the PIO peripheral passed to
-/// [`crate::embassy::Bus::new`].
+/// A PIO block usable by the PIO-USB host transport
+///
+/// An embassy-rp [`Instance`] plus its concrete [`pac::pio::Pio`] register block
+/// (which `Instance` keeps sealed). Implemented for `PIO0`/`PIO1` (and `PIO2` on RP2350).
+///
+/// Select the block through the PIO peripheral passed to [`crate::Bus::new`].
 pub trait UsbPioInstance: Instance {
     /// The PIO block's register base (e.g. `pac::PIO0`).
     const REGS: pac::pio::Pio;

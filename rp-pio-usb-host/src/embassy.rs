@@ -84,8 +84,9 @@ impl<'d, PIO: UsbPioInstance> Bus<'d, PIO> {
     }
 }
 
-/// A single endpoint pipe; implements [`UsbPipe`]. Carries the addressing it needs
-/// to build tokens at runtime plus its own data-toggle and timeout state.
+/// A single endpoint pipe; implements [`UsbPipe`].
+///
+/// Carries the addressing it needs to build tokens at runtime plus its own data-toggle and timeout state.
 pub struct PioPipe<'a, 'd, T: pipe::Type, D: pipe::Direction, PIO: UsbPioInstance = PIO0> {
     /// Shared root-port bus used to execute this pipe's transactions.
     shared: &'a Bus<'d, PIO>,
@@ -241,8 +242,7 @@ impl<'a, 'd: 'a, T: pipe::Type, D: pipe::Direction, PIO: UsbPioInstance> UsbPipe
     }
 }
 
-/// Pipe allocator handle; implements [`UsbHostAllocator`]. Cloneable — every clone
-/// shares the same underlying bus.
+/// Pipe allocator handle; implements [`UsbHostAllocator`].
 pub struct PioUsbAllocator<'a, 'd, PIO: UsbPioInstance = PIO0> {
     /// Shared root-port bus state.
     shared: &'a Bus<'d, PIO>,
@@ -301,8 +301,7 @@ impl<'a, 'd: 'a, PIO: UsbPioInstance> UsbHostAllocator<'a> for PioUsbAllocator<'
     }
 }
 
-/// Root-port controller; implements [`UsbHostController`]. `'a` is the borrow of the
-/// shared bus, `'d` the bus's own (peripheral) lifetime, with `'d: 'a`.
+/// Root-port controller; implements [`UsbHostController`].
 pub struct PioUsbController<'a, 'd, PIO: UsbPioInstance = PIO0> {
     /// Shared root-port bus state.
     shared: &'a Bus<'d, PIO>,

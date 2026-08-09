@@ -1299,14 +1299,22 @@ dependencies = [
 name = "rp-pio-usb-host"
 version = "0.1.0"
 dependencies = [
+ "cortex-m-rt",
  "critical-section",
+ "defmt",
+ "defmt-rtt",
+ "embassy-executor",
  "embassy-rp",
  "embassy-sync",
  "embassy-time",
  "embassy-usb-driver",
+ "embassy-usb-host",
  "fixed",
+ "panic-probe",
  "pio",
+ "portable-atomic",
  "rp-pac",
+ "static_cell",
 ]
 
 [[package]]

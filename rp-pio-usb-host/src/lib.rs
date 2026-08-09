@@ -17,5 +17,5 @@ mod tx_pio;
 mod frame_counter;
 
 pub use bus::Pulldown;
-pub use embassy::Bus;
+pub use embassy::*;
 pub use pio_instance::UsbPioInstance;

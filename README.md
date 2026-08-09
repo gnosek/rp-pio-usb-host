@@ -4,7 +4,7 @@ This crate implements a USB host driver for the RP2040 and RP235x microcontrolle
 Input/Output) feature. It allows these microcontrollers to act as USB hosts on arbitrary GPIO pins, without using
 dedicated USB hardware.
 
-The driver in this crate implements the [USBController]((https://docs.embassy.dev/embassy-usb-driver/0.2.2/default/host/trait.UsbHostController.html))
+The driver in this crate implements the [USBController](https://docs.embassy.dev/embassy-usb-driver/0.2.2/default/host/trait.UsbHostController.html)
 trait from the [embassy-usb-driver](https://docs.embassy.dev/embassy-usb-driver/0.2.2/default/index.html) crate,
 which is part of the Embassy project. This lets you use the higher level abstractions from
 [embassy-usb-host](https://docs.embassy.dev/embassy-usb-host/git/default/index.html) to interact with various
@@ -80,7 +80,7 @@ you are using.
 
 Then, in your code, you can create a USB host instance and use it to interact with USB devices:
 
-```rust
+```no_run
 #![no_std]
 #![no_main]
 
@@ -88,19 +88,25 @@ use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
 use embassy_rp::peripherals::PIO0;
 use embassy_usb_host::BusState;
-use rp_pio_usb_host::embassy::Bus;
+use rp_pio_usb_host::Bus;
 use static_cell::StaticCell;
+use panic_probe as _;
+use defmt_rtt as _;
+use defmt::info;
 
 // Bind IRQ0 of the chosen PIO block to the PIO interrupt handler.
-// If you want to use a different PIO block, change `PIO0` to `PIO1` or `PIO2` (for RP235x) everywhere.
+// If you want to use a different PIO block, change `PIO0` to `PIO1` or `PIO2` (for RP235x)
+// everywhere.
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO0>;
 });
 
-// The idle task handles USB keepalives that prevent the USB device from suspending due to bus inactivity.
-// It wakes up every 1ms. The timing is less critical for LS devices (the suspend deadline is 3ms), but for FS devices,
-// the USB spec requires that the host send a keepalive every 1ms. If you do lots of blocking work in your main task,
-// you may want to spawn this idle task on a separate interrupt-based executor to ensure that it runs on time.
+// The idle task handles USB keepalives that prevent the USB device from suspending due to
+// bus inactivity. It wakes up every 1ms. The timing is less critical for LS devices
+// (the suspend deadline is 3ms), but for FS devices, the USB spec requires that the host
+// send a keepalive every 1ms. If you do lots of blocking work in your main task, you may want
+// to spawn this idle task on a separate interrupt-based executor to ensure that it runs
+// on time.
 #[embassy_executor::task]
 async fn usb_idle_task(bus: &'static Bus<'static, PIO0>) {
     bus.idle_task().await;
@@ -117,7 +123,8 @@ async fn main(spawner: Spawner) {
         p.PIN_0, // D+ line on GPIO0 (physical pin 1 on a RPi Pico)
         p.PIN_1, // D- line on GPIO1 (physical pin 2 on a RPi Pico)
         Irqs,
-        rp_pio_usb_host::bus::Pulldown::External, // `Internal` if you don't have external pulldown resistors on the USB lines
+        rp_pio_usb_host::Pulldown::External, // `Internal` if you don't have external
+                                             // pulldown resistors on the USB lines
     ));
     
     // Spawn the USB idle task to handle keepalives.
@@ -129,5 +136,10 @@ async fn main(spawner: Spawner) {
     let (mut bus_ctrl, bus) = embassy_usb_host::bus(controller, &BUS_STATE);
   
     // Now you can use `bus_ctrl` and `bus` to interact with USB devices.
+    
+    loop {
+        let speed = bus_ctrl.wait_for_connection().await;
+        info!("Device connected at speed {:?}", speed);
+    }
 }
 ```
