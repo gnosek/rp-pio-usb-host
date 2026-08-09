@@ -2,6 +2,11 @@
 name = "rp-pio-usb-host"
 version = "0.1.0"
 edition = "2024"
+description = "Embassy USB host driver for RP2040 and RP235x devices using PIO"
+license = "MIT"
+documentation = "https://docs.rs/rp-pio-usb-host"
+homepage = "https://github.com/gnosek/rp-pio-usb-host"
+repository = "https://github.com/gnosek/rp-pio-usb-host"
 
 [features]
 rp2040 = ["embassy-rp/rp2040", "rp-pac/rp2040"]
