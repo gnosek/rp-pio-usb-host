@@ -10,11 +10,16 @@ use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::PIO0;
 use embassy_rp::pio::InterruptHandler;
 use embassy_time::{Duration, Timer};
-use embassy_usb_driver::host::{DeviceEvent, PipeError, UsbHostController};
-use embassy_usb_host::descriptor::{DeviceDescriptor, DeviceDescriptorPartial, USBDescriptor};
+use embassy_usb_driver::host::{
+    DeviceEvent, HostError, PipeError, TimeoutConfig, UsbHostAllocator, UsbHostController,
+};
+use embassy_usb_driver::host::{UsbPipe, pipe};
+use embassy_usb_driver::{EndpointAddress, EndpointInfo, EndpointType};
+use embassy_usb_host::descriptor::{
+    ConfigurationDescriptorChain, DeviceDescriptor, DeviceDescriptorPartial, USBDescriptor,
+};
 use rp_pio_usb_host::bus::Pulldown;
 use rp_pio_usb_host::embassy::Bus;
-use rp_pio_usb_host::pio_instance::UsbPioInstance;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -22,172 +27,147 @@ bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
 });
 
-enum DescriptorResponse {
-    Full(DeviceDescriptor),
-    Partial(DeviceDescriptorPartial),
-    DecodeError,
+#[derive(defmt::Format)]
+enum DescriptorError {
+    Pipe(PipeError),
+    Decode(embassy_usb_host::descriptor::DescriptorError),
+    Host(HostError),
 }
 
-fn get_device_descriptor<PIO: UsbPioInstance>(
-    bus: &mut rp_pio_usb_host::bus::Bus<PIO>,
-    mps: Option<u16>,
-) -> Result<DescriptorResponse, PipeError> {
-    let get_device =
-        embassy_usb_host::control::SetupPacket::get_device_descriptor(mps.unwrap_or(8));
+impl From<PipeError> for DescriptorError {
+    fn from(err: PipeError) -> Self {
+        DescriptorError::Pipe(err)
+    }
+}
+
+impl From<embassy_usb_host::descriptor::DescriptorError> for DescriptorError {
+    fn from(err: embassy_usb_host::descriptor::DescriptorError) -> Self {
+        DescriptorError::Decode(err)
+    }
+}
+
+impl From<HostError> for DescriptorError {
+    fn from(err: HostError) -> Self {
+        DescriptorError::Host(err)
+    }
+}
+
+fn control_pipe<'a>(
+    controller: &impl UsbHostController<'a>,
+    mps: u16,
+) -> impl UsbPipe<pipe::Control, pipe::In> {
+    let ep = EndpointInfo {
+        addr: EndpointAddress::from_parts(0, embassy_usb_driver::Direction::In),
+        ep_type: EndpointType::Control,
+        max_packet_size: mps,
+        interval_ms: 0,
+    };
+    controller.allocator().alloc_pipe(0, &ep, None).unwrap()
+}
+
+async fn get_partial_device_descriptor(
+    controller: &impl UsbHostController<'_>,
+) -> Result<DeviceDescriptorPartial, DescriptorError> {
+    let get_device = embassy_usb_host::control::SetupPacket::get_device_descriptor(8);
     let mut pdd = [0u8; 64];
 
-    let len = bus.control_in(0, 0, mps.unwrap_or(8), &get_device.to_bytes(), &mut pdd)?;
+    let mut pipe = control_pipe(controller, 8);
+    pipe.set_timeout(TimeoutConfig::default());
+    let len = pipe.control_in(&get_device.to_bytes(), &mut pdd).await?;
 
-    if mps.is_some() {
-        let desc = match DeviceDescriptor::try_from_bytes(&pdd[..len]) {
-            Ok(desc) => desc,
-            Err(e) => {
-                error!(
-                    "failed to parse full device descriptor {:x}: {}",
-                    Debug2Format(&pdd[..len]),
-                    e
-                );
-                return Ok(DescriptorResponse::DecodeError);
-            }
-        };
-        Ok(DescriptorResponse::Full(desc))
-    } else {
-        let desc = match DeviceDescriptorPartial::try_from_bytes(&pdd[..len]) {
-            Ok(desc) => desc,
-            Err(e) => {
-                error!(
-                    "failed to parse partial device descriptor {:x}: {}",
-                    Debug2Format(&pdd[..len]),
-                    e
-                );
-                return Ok(DescriptorResponse::DecodeError);
-            }
-        };
-        Ok(DescriptorResponse::Partial(desc))
-    }
+    Ok(DeviceDescriptorPartial::try_from_bytes(&pdd[..len])?)
 }
 
-fn show_device_descriptor<PIO: UsbPioInstance>(
-    bus: &mut rp_pio_usb_host::bus::Bus<PIO>,
-) -> Result<u16, PipeError> {
-    let mut mps = None;
-    for _ in 0..100 {
-        match get_device_descriptor(bus, mps) {
-            Ok(DescriptorResponse::Full(desc)) => {
-                debug!("full device descriptor: {:?}", Debug2Format(&desc));
-                let usb_major_version = desc.bcd_usb >> 8;
-                let usb_minor_version = desc.bcd_usb & 0xff;
-                let device_major_version = desc.bcd_device >> 8;
-                let device_minor_version = desc.bcd_device >> 4 & 0xf;
-                let device_patch_version = desc.bcd_device & 0xf;
-                info!(
-                    "connected device: VID={:04x}, PID={:04x}, USB version {}.{}, device version {}.{}.{} , max_packet_size0={}",
-                    desc.vendor_id,
-                    desc.product_id,
-                    usb_major_version,
-                    usb_minor_version,
-                    device_major_version,
-                    device_minor_version,
-                    device_patch_version,
-                    desc.max_packet_size0
-                );
-                return Ok(desc.max_packet_size0 as u16);
-            }
-            Ok(DescriptorResponse::Partial(desc)) => {
-                debug!("partial device descriptor: {:?}", Debug2Format(&desc));
-                mps = Some(desc.max_packet_size0 as u16);
-            }
-            Ok(DescriptorResponse::DecodeError) => {
-                error!("failed to decode device descriptor");
-                return Err(PipeError::Stall);
-            }
-            Err(PipeError::Timeout) => continue,
-            Err(e) => {
-                error!("error getting device descriptor: {:?}", e);
-                return Err(e);
-            }
-        }
-    }
-    Err(PipeError::Stall)
-}
-
-fn get_device_config<PIO: UsbPioInstance>(
-    bus: &mut rp_pio_usb_host::bus::Bus<PIO>,
+async fn get_full_device_descriptor(
+    controller: &impl UsbHostController<'_>,
     mps: u16,
-) -> Result<u16, PipeError> {
+) -> Result<DeviceDescriptor, DescriptorError> {
+    let get_device = embassy_usb_host::control::SetupPacket::get_device_descriptor(mps);
+    let mut pdd = [0u8; 64];
+
+    let mut pipe = control_pipe(controller, mps);
+    pipe.set_timeout(TimeoutConfig::default());
+    let len = pipe.control_in(&get_device.to_bytes(), &mut pdd).await?;
+
+    Ok(DeviceDescriptor::try_from_bytes(&pdd[..len])?)
+}
+
+async fn show_device_descriptor(
+    controller: &impl UsbHostController<'_>,
+) -> Result<u16, DescriptorError> {
+    let partial_desc = get_partial_device_descriptor(controller).await?;
+    debug!(
+        "partial device descriptor: {:?}",
+        Debug2Format(&partial_desc)
+    );
+    let mps = partial_desc.max_packet_size0 as u16;
+    let desc = get_full_device_descriptor(controller, mps).await?;
+
+    debug!("full device descriptor: {:?}", Debug2Format(&desc));
+    let usb_major_version = desc.bcd_usb >> 8;
+    let usb_minor_version = desc.bcd_usb & 0xff;
+    let device_major_version = desc.bcd_device >> 8;
+    let device_minor_version = desc.bcd_device >> 4 & 0xf;
+    let device_patch_version = desc.bcd_device & 0xf;
+    info!(
+        "connected device: VID={:04x}, PID={:04x}, USB version {}.{}, device version {}.{}.{} , max_packet_size0={}",
+        desc.vendor_id,
+        desc.product_id,
+        usb_major_version,
+        usb_minor_version,
+        device_major_version,
+        device_minor_version,
+        device_patch_version,
+        desc.max_packet_size0
+    );
+    Ok(desc.max_packet_size0 as u16)
+}
+
+async fn get_device_config_len(
+    controller: &impl UsbHostController<'_>,
+    mps: u16,
+) -> Result<u16, DescriptorError> {
     debug!("getting initial configuration descriptor",);
     let get_config = embassy_usb_host::control::SetupPacket::get_config_descriptor(0, 9);
     let mut buf = [0u8; 256];
+    let mut pipe = control_pipe(controller, mps);
 
-    let len = loop {
-        match bus.control_in(0, 0, mps, &get_config.to_bytes(), &mut buf) {
-            Ok(len) => break len,
-            Err(PipeError::Timeout) => continue,
-            Err(e) => return Err(e),
-        };
-    };
-
+    let len = pipe.control_in(&get_config.to_bytes(), &mut buf).await?;
     debug!(
         "raw configuration descriptor: {:x}",
         Debug2Format(&buf[..len])
     );
 
-    match embassy_usb_host::descriptor::ConfigurationDescriptor::try_from_bytes(&buf[..len]) {
-        Ok(desc) => {
-            debug!("configuration descriptor: {:?}", Debug2Format(&desc));
-            Ok(desc.total_len)
-        }
-        Err(e) => {
-            error!(
-                "failed to parse configuration descriptor {:x}: {}",
-                Debug2Format(&buf[..len]),
-                e
-            );
-            Err(PipeError::Stall)
-        }
-    }
+    Ok(
+        embassy_usb_host::descriptor::ConfigurationDescriptor::try_from_bytes(&buf[..len])?
+            .total_len,
+    )
 }
-fn get_all_device_configs<PIO: UsbPioInstance>(
-    bus: &mut rp_pio_usb_host::bus::Bus<PIO>,
+
+async fn show_all_device_configs(
+    controller: &impl UsbHostController<'_>,
     mps: u16,
     max_len: u16,
-) -> Result<u16, PipeError> {
+) -> Result<(), DescriptorError> {
     debug!(
         "getting configuration descriptor with max_len={:?}",
         max_len
     );
     let get_config = embassy_usb_host::control::SetupPacket::get_config_descriptor(0, max_len);
     let mut buf = [0u8; 256];
+    let mut pipe = control_pipe(controller, mps);
 
-    let len = loop {
-        match bus.control_in(0, 0, mps, &get_config.to_bytes(), &mut buf) {
-            Ok(len) => break len,
-            Err(PipeError::Timeout) => continue,
-            Err(e) => return Err(e),
-        };
-    };
-
+    let len = pipe.control_in(&get_config.to_bytes(), &mut buf).await?;
     debug!(
         "raw configuration descriptor: {:x}",
         Debug2Format(&buf[..len])
     );
 
-    match embassy_usb_host::descriptor::ConfigurationDescriptorChain::try_from_slice(&buf[..len]) {
-        Ok(chain) => {
-            for desc in chain.iter_interface() {
-                debug!("interface descriptor: {:?}", Debug2Format(&*desc));
-            }
-            Ok(chain.total_len)
-        }
-        Err(e) => {
-            error!(
-                "failed to parse configuration descriptor {:x}: {}",
-                Debug2Format(&buf[..len]),
-                e
-            );
-            Err(PipeError::Stall)
-        }
+    for desc in ConfigurationDescriptorChain::try_from_slice(&buf[..len])?.iter_interface() {
+        debug!("interface descriptor: {:?}", Debug2Format(&*desc));
     }
+
+    Ok(())
 }
 
 #[embassy_executor::task]
@@ -221,19 +201,28 @@ async fn main(spawner: Spawner) {
             _ => (),
         }
 
-        {
-            let mut bus = bus.lock().await;
-            let mps = match show_device_descriptor(&mut bus) {
-                Ok(mps) => mps,
-                Err(_) => continue,
-            };
+        let mps = match show_device_descriptor(&controller).await {
+            Ok(mps) => mps,
+            Err(e) => {
+                error!("error showing device descriptor: {:?}", e);
+                continue;
+            }
+        };
 
-            let config_max_len = match get_device_config(&mut bus, mps) {
-                Ok(len) => len,
-                Err(_) => continue,
-            };
+        let config_max_len = match get_device_config_len(&controller, mps).await {
+            Ok(len) => len,
+            Err(e) => {
+                error!("error getting device config length: {:?}", e);
+                continue;
+            }
+        };
 
-            get_all_device_configs(&mut bus, mps, config_max_len).ok();
+        match show_all_device_configs(&controller, mps, config_max_len).await {
+            Ok(_) => {}
+            Err(e) => {
+                error!("error showing all device configs: {:?}", e);
+                continue;
+            }
         }
 
         loop {
