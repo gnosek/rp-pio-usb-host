@@ -12,6 +12,12 @@ repository = "https://github.com/gnosek/rp-pio-usb-host"
 rp2040 = ["embassy-rp/rp2040", "rp-pac/rp2040"]
 rp235xa = ["embassy-rp/rp235xa", "rp-pac/rp235x"]
 rp235xb = ["embassy-rp/rp235xb", "rp-pac/rp235x"]
+defmt = [
+    "embassy-rp/defmt",
+    "embassy-sync/defmt",
+    "embassy-time/defmt",
+    "embassy-usb-driver/defmt",
+]
 
 [package.metadata.docs.rs]
 features = ["rp2040"]
@@ -19,10 +25,10 @@ default-target = "thumbv6m-none-eabi"
 
 [dependencies]
 critical-section = "1.2.0"
-embassy-rp = { version = "0.10.0", features = ["defmt", "time-driver", "critical-section-impl"] }
-embassy-sync = { version = "0.8.0", features = ["defmt"] }
-embassy-time = { version = "0.5.1", features = ["defmt", "defmt-timestamp-uptime"] }
-embassy-usb-driver = { version = "0.2.2", features = ["defmt"] }
+embassy-rp = "0.10.0"
+embassy-sync = "0.8.0"
+embassy-time = "0.5.1"
+embassy-usb-driver = "0.2.2"
 rp-pac = { version = "7.0.0", default-features = false }
 fixed = "1.31.0"
 pio = "0.3.0"
