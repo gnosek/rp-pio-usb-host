@@ -14,7 +14,6 @@ mod rx_driver;
 mod rx_pio;
 mod tx_driver;
 mod tx_pio;
-mod frame_counter;
 
 pub use bus::Pulldown;
 pub use embassy::*;

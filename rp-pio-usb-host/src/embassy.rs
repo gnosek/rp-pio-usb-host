@@ -5,7 +5,6 @@
 //! `embassy-usb-host`.
 
 use crate::bus::{Bus as PioUsbBus, Pulldown};
-use crate::frame_counter::FrameCounter;
 use crate::pio_instance::UsbPioInstance;
 use core::marker::PhantomData;
 use embassy_rp::Peri;
@@ -31,8 +30,6 @@ const FRAME_INTERVAL_US: u32 = 1000; // 1 ms
 pub struct Bus<'d, PIO: UsbPioInstance = PIO0> {
     /// The single physical bus shared by the controller and all allocated pipes.
     bus: Mutex<CriticalSectionRawMutex, PioUsbBus<'d, PIO>>,
-
-    frame_counter: FrameCounter,
 }
 
 impl<'d, PIO: UsbPioInstance> Bus<'d, PIO> {
@@ -50,25 +47,12 @@ impl<'d, PIO: UsbPioInstance> Bus<'d, PIO> {
         let bus = PioUsbBus::new(pio, dp, dm, irq0, pulldown);
         Self {
             bus: Mutex::new(bus),
-            frame_counter: FrameCounter::new(),
         }
     }
 
     /// Obtain the root-port controller handle.
     pub fn controller<'a>(&'a self) -> PioUsbController<'a, 'd, PIO> {
         PioUsbController { shared: self }
-    }
-
-    /// Perform one non-blocking keep-alive check.
-    ///
-    /// If an in-flight transfer owns the bus, this frame is skipped because that
-    /// transfer itself provides bus activity. [`Self::idle_task`] calls this once
-    /// per frame.
-    fn tick(&self) {
-        let frame = self.frame_counter.next();
-        if let Ok(mut bus) = self.bus.try_lock() {
-            bus.keepalive(frame);
-        }
     }
 
     /// Run the keep-alive task for as long as the bus is in use.
@@ -78,8 +62,11 @@ impl<'d, PIO: UsbPioInstance> Bus<'d, PIO> {
     /// transfers.
     pub async fn idle_task(&self) {
         loop {
-            self.tick();
-            PioUsbBus::<PIO>::wait_for_next_frame().await;
+            let delay_us = {
+                let mut bus = self.bus.lock().await;
+                bus.keepalive()
+            };
+            Timer::after_micros(delay_us as u64).await;
         }
     }
 }
@@ -322,7 +309,7 @@ impl<'a, 'd: 'a, PIO: UsbPioInstance> UsbHostController<'a> for PioUsbController
                 let mut bus = self.shared.bus.lock().await;
                 let event = bus.poll_device_event();
                 if matches!(event, Some(DeviceEvent::Connected(_))) {
-                    bus.bus_reset(&self.shared.frame_counter).await;
+                    bus.bus_reset().await;
                 }
                 event
             };
@@ -335,6 +322,6 @@ impl<'a, 'd: 'a, PIO: UsbPioInstance> UsbHostController<'a> for PioUsbController
 
     async fn bus_reset(&mut self) {
         let mut bus = self.shared.bus.lock().await;
-        bus.bus_reset(&self.shared.frame_counter).await
+        bus.bus_reset().await
     }
 }
