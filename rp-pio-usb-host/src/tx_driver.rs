@@ -16,9 +16,12 @@ const TX_CLOCK_HZ_LS: u32 = 6_000_000;
 /// TX state-machine IRQ bit raised by the EOP instruction.
 const IRQ_TX_EOP_BIT: u8 = 1 << 0;
 
-/// Busy-wait timeout for `wait_tx_complete`. Realistically, we should expect about 25µs max
-/// for a full-size LS packet.
-const TX_WAIT_TIMEOUT_US: u32 = 50;
+/// Busy-wait timeout for each stage of [`TxDriver::wait`].
+///
+/// `wait` starts once the last word is in the FIFO, so at most the FIFO
+/// (8 words) plus the word being shifted out remain: 9 * 16 = 144 symbols,
+/// ~96 us at low speed. This timeout covers that with margin.
+const TX_WAIT_TIMEOUT_US: u32 = 120;
 
 /// TX FIFO capacity when the state machine uses [`FifoJoin::TxOnly`].
 const TX_FIFO_DEPTH: usize = 8;

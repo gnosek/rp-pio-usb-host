@@ -4,7 +4,6 @@
 //! reset, and low-/full-speed keep-alives. Higher-level adapters can build control,
 //! bulk, and interrupt transfers on top of these primitives.
 
-use crate::frame_counter::FrameCounter;
 use crate::pio_instance::UsbPioInstance;
 use crate::ram::now_us;
 use crate::rx_driver::{RxDriver, RxPacketStatus};
@@ -70,6 +69,14 @@ const DATA_TOTAL_CAP: u32 = 400;
 /// helper because it runs in the synchronous transaction path.
 const FRAME_INTERVAL_US: u32 = 1000;
 
+/// Worst-case duration of a Full-Speed transaction plus EOF1 width, in microseconds.
+///
+/// Transactions must complete before the EOF1 delimiter. The worst-case full-speed
+/// transaction timing, including token TX, up to an 8 microsecond SOP wait,
+/// a maximally bit-stuffed 64-byte DATA packet, and ACK TX is about 70 microseconds.
+/// 75 microseconds covers both the transaction and the EOF1 window itself.
+const FS_EOF_GUARD_MARGIN_US: u32 = 75;
+
 /// Pull-down configuration for the USB bus.
 ///
 /// The USB spec mandates 15k pull-downs on the D+/D- lines to detect device presence.
@@ -134,9 +141,11 @@ pub struct Bus<'a, PIO: UsbPioInstance> {
 
     /// Timestamp of the last SOF packet sent, in microseconds from [`now_us`].
     ///
-    /// For FS devices, we need to send one SOF frame every millisecond,
-    /// *if* the bus is not busy at the moment.
+    /// For FS devices, we need to send one SOF frame every millisecond.
     last_sof: u32,
+
+    /// Current 11-bit SOF frame counter.
+    frame: u16,
 
     /// Scratch buffer for the NRZI/bit-stuff encoder.
     enc: [u8; crate::encoding::MAX_ENCODED_PACKET_BYTES],
@@ -222,6 +231,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
             debounce: 0,
             last_activity: now,
             last_sof: now,
+            frame: 0,
             enc: [0u8; crate::encoding::MAX_ENCODED_PACKET_BYTES],
             tx,
             rx,
@@ -252,10 +262,12 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
     }
 
     /// Drive a single SOF frame (keep-alive). Advances the internal frame counter.
-    fn sof(&mut self, frame: u16) {
+    fn sof(&mut self) {
         self.last_sof = now_us();
-        let sof = crate::encoding::build_sof(frame);
+        self.mark_activity();
+        let sof = crate::encoding::build_sof(self.frame);
         self.tx.transmit(&sof);
+        self.frame = self.frame.wrapping_add(1) & 0x7ff;
     }
 
     /// Low-speed keep-alive: send a single low-speed **EOP** via the TX player. Encoding
@@ -271,26 +283,48 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
     fn ls_keepalive(&mut self) {
         self.mark_activity();
         self.tx.transmit(&crate::encoding::LS_KEEPALIVE_PACKET);
-        self.mark_activity();
     }
 
-    pub(crate) fn keepalive(&mut self, frame: u16) {
+    /// Emit a frame keep-alive if due, and return the microseconds remaining until
+    /// the next keep-alive deadline.
+    pub(crate) fn keepalive(&mut self) -> u32 {
         if !self.attached {
-            return;
+            return FRAME_INTERVAL_US;
         }
 
         match self.speed {
             Speed::Full => {
                 if now_us().wrapping_sub(self.last_sof) >= FRAME_INTERVAL_US {
-                    self.sof(frame)
+                    self.sof();
                 }
+                FRAME_INTERVAL_US.saturating_sub(now_us().wrapping_sub(self.last_sof))
             }
             Speed::Low => {
                 if now_us().wrapping_sub(self.last_activity) >= FRAME_INTERVAL_US {
-                    self.ls_keepalive()
+                    self.ls_keepalive();
                 }
+                FRAME_INTERVAL_US.saturating_sub(now_us().wrapping_sub(self.last_activity))
             }
-            _ => (), // only FS and LS are supported by the PIO host transport
+            _ => FRAME_INTERVAL_US, // only FS and LS are supported by the PIO host transport
+        }
+    }
+
+    /// Ensure there is sufficient time remaining in the current 1 ms frame before
+    /// starting a full-speed transaction, and emit an SOF if a frame boundary has
+    /// arrived.
+    ///
+    /// If less than [`FS_EOF_GUARD_MARGIN_US`] remains before the 1.000 ms frame
+    /// boundary, hold the transaction until the 1 ms mark and emit the SOF token
+    /// first so packets do not extend across EOF1.
+    fn ensure_safe_frame_window(&mut self) {
+        if self.speed == Speed::Full
+            && self.attached
+            && now_us().wrapping_sub(self.last_sof) >= FRAME_INTERVAL_US - FS_EOF_GUARD_MARGIN_US
+        {
+            while now_us().wrapping_sub(self.last_sof) < FRAME_INTERVAL_US {
+                core::hint::spin_loop();
+            }
+            self.sof();
         }
     }
 
@@ -331,13 +365,13 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         Timer::after_micros(FRAME_INTERVAL_US as u64).await;
     }
 
-    pub(crate) async fn bus_reset(&mut self, frame_counter: &FrameCounter) {
+    pub(crate) async fn bus_reset(&mut self) {
         self.tx.drive_reset_se0();
         Timer::after(Duration::from_micros(RESET_SE0_US)).await;
         self.tx.release_reset();
 
         for _ in 0..RESET_RECOVERY_FRAMES {
-            self.keepalive(frame_counter.next());
+            self.keepalive();
             Self::wait_for_next_frame().await;
         }
     }
@@ -361,8 +395,15 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
     #[unsafe(link_section = ".data.ram_func")]
     #[inline(never)]
     fn in_reply(&mut self, in_tok: &[u32], pkt: &mut [u8]) -> Result<InReply, PipeError> {
-        self.transmit_for_reply(in_tok, None);
-        let (n, status, ack_sent) = self.receive_data_and_ack(pkt);
+        self.ensure_safe_frame_window();
+
+        let (n, status, ack_sent) = critical_section::with(|_| {
+            self.transmit_for_reply_inner(in_tok, None);
+            self.receive_data_and_ack(pkt)
+        });
+        if ack_sent {
+            self.tx.wait();
+        }
         if status == RxPacketStatus::Overflow {
             return Err(PipeError::Babble);
         }
@@ -372,14 +413,11 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
 
         use crate::pid;
 
-        match (ack_sent, pkt[1]) {
-            (_, pid::USB_PID_STALL) => Err(PipeError::Stall),
-            (_, pid::USB_PID_NAK) => Ok(InReply::Nak),
-            (_, pid @ (pid::USB_PID_DATA0 | pid::USB_PID_DATA1)) => {
+        match pkt[1] {
+            pid::USB_PID_STALL => Err(PipeError::Stall),
+            pid::USB_PID_NAK => Ok(InReply::Nak),
+            pid @ (pid::USB_PID_DATA0 | pid::USB_PID_DATA1) => {
                 let valid_crc = status == RxPacketStatus::ValidData;
-                if ack_sent && valid_crc {
-                    self.tx.wait();
-                }
                 Ok(InReply::Data {
                     pid,
                     valid_crc,
@@ -390,17 +428,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         }
     }
 
-    /// Transmit one or two packets, then arm RX for the device reply.
-    ///
-    /// Used for token-only IN transactions and token+DATA OUT/SETUP transactions.
-    #[unsafe(link_section = ".data.ram_func")]
-    #[inline(never)]
-    pub(crate) fn transmit_for_reply(&mut self, first: &[u32], second: Option<&[u32]>) {
-        self.transmit_for_reply_inner(first, second);
-    }
-
-    /// Shared RAM-inlined body for [`transmit_for_reply`](Self::transmit_for_reply)
-    /// and [`transmit_and_check_ack`](Self::transmit_and_check_ack).
+    /// Shared RAM-inlined body for `in_reply` and `transmit_and_check_ack`.
     #[inline(always)]
     fn transmit_for_reply_inner(&mut self, first: &[u32], second: Option<&[u32]>) {
         self.rx.prepare_for_receive();
@@ -422,9 +450,12 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         first: &[u32],
         second: Option<&[u32]>,
     ) -> Result<bool, PipeError> {
-        self.transmit_for_reply_inner(first, second);
+        self.ensure_safe_frame_window();
         let mut hbuf = [0u8; 8];
-        let (hlen, _) = self.rx.receive(&mut hbuf);
+        let (hlen, _) = critical_section::with(|_| {
+            self.transmit_for_reply_inner(first, second);
+            self.rx.receive(&mut hbuf)
+        });
         self.mark_activity();
         if hlen < 2 {
             return Ok(false);
