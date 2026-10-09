@@ -361,8 +361,13 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
     #[unsafe(link_section = ".data.ram_func")]
     #[inline(never)]
     fn in_reply(&mut self, in_tok: &[u32], pkt: &mut [u8]) -> Result<InReply, PipeError> {
-        self.transmit_for_reply(in_tok, None);
-        let (n, status, ack_sent) = self.receive_data_and_ack(pkt);
+        let (n, status, ack_sent) = critical_section::with(|_| {
+            self.transmit_for_reply_inner(in_tok, None);
+            self.receive_data_and_ack(pkt)
+        });
+        if ack_sent {
+            self.tx.wait();
+        }
         if status == RxPacketStatus::Overflow {
             return Err(PipeError::Babble);
         }
@@ -372,14 +377,11 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
 
         use crate::pid;
 
-        match (ack_sent, pkt[1]) {
-            (_, pid::USB_PID_STALL) => Err(PipeError::Stall),
-            (_, pid::USB_PID_NAK) => Ok(InReply::Nak),
-            (_, pid @ (pid::USB_PID_DATA0 | pid::USB_PID_DATA1)) => {
+        match pkt[1] {
+            pid::USB_PID_STALL => Err(PipeError::Stall),
+            pid::USB_PID_NAK => Ok(InReply::Nak),
+            pid @ (pid::USB_PID_DATA0 | pid::USB_PID_DATA1) => {
                 let valid_crc = status == RxPacketStatus::ValidData;
-                if ack_sent && valid_crc {
-                    self.tx.wait();
-                }
                 Ok(InReply::Data {
                     pid,
                     valid_crc,
@@ -390,17 +392,7 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         }
     }
 
-    /// Transmit one or two packets, then arm RX for the device reply.
-    ///
-    /// Used for token-only IN transactions and token+DATA OUT/SETUP transactions.
-    #[unsafe(link_section = ".data.ram_func")]
-    #[inline(never)]
-    pub(crate) fn transmit_for_reply(&mut self, first: &[u32], second: Option<&[u32]>) {
-        self.transmit_for_reply_inner(first, second);
-    }
-
-    /// Shared RAM-inlined body for [`transmit_for_reply`](Self::transmit_for_reply)
-    /// and [`transmit_and_check_ack`](Self::transmit_and_check_ack).
+    /// Shared RAM-inlined body for `in_reply` and `transmit_and_check_ack`.
     #[inline(always)]
     fn transmit_for_reply_inner(&mut self, first: &[u32], second: Option<&[u32]>) {
         self.rx.prepare_for_receive();
@@ -422,9 +414,11 @@ impl<'a, PIO: UsbPioInstance> Bus<'a, PIO> {
         first: &[u32],
         second: Option<&[u32]>,
     ) -> Result<bool, PipeError> {
-        self.transmit_for_reply_inner(first, second);
         let mut hbuf = [0u8; 8];
-        let (hlen, _) = self.rx.receive(&mut hbuf);
+        let (hlen, _) = critical_section::with(|_| {
+            self.transmit_for_reply_inner(first, second);
+            self.rx.receive(&mut hbuf)
+        });
         self.mark_activity();
         if hlen < 2 {
             return Ok(false);
