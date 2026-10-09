@@ -210,17 +210,15 @@ impl<'d, PIO: UsbPioInstance> RxDriver<'d, PIO> {
         }
 
         let mut idx = 0usize;
-        let mut overflowed = false;
         let mut crc: u16 = 0xffff; // running USB-CRC16 residual (no final XOR)
         let mut td = ram::now_us();
         loop {
             if let Some(w) = ram::pio_sm_try_pull_rx::<PIO, 2>() {
-                let b = (w >> 24) as u8;
-                if idx < out.len() {
-                    out[idx] = b;
-                } else {
-                    overflowed = true;
+                if idx >= out.len() {
+                    return (out.len(), RxPacketStatus::Overflow);
                 }
+                let b = (w >> 24) as u8;
+                out[idx] = b;
                 if idx >= 2 {
                     // Inline table CRC update over the RAM-resident table (no flash call).
                     crc = crate::crc::crc16_update(crc, b);
@@ -228,15 +226,11 @@ impl<'d, PIO: UsbPioInstance> RxDriver<'d, PIO> {
                 idx += 1;
                 td = ram::now_us();
             } else if PIO::REGS.irq().read().irq() & (1 << IRQ_RX_EOP) != 0 {
-                let n = idx.min(out.len());
-                if overflowed {
-                    return (n, RxPacketStatus::Overflow);
-                }
                 // DATA0/DATA1 are the only device-emitted PIDs the host ACKs on LS/FS
                 // bulk/interrupt/control-IN. Handshakes (ACK/NAK/STALL) are terminal.
                 // Iso IN also uses DATA0/1 but MUST NOT be handshaken — if iso support
                 // is added, use a separate no-ACK receive path.
-                let valid_data = n >= 4
+                let valid_data = idx >= 4
                     && crc == crate::crc::USB_CRC16_RESIDUE
                     && (out[1] == crate::pid::USB_PID_DATA0 || out[1] == crate::pid::USB_PID_DATA1);
                 let status = if valid_data {
@@ -244,14 +238,9 @@ impl<'d, PIO: UsbPioInstance> RxDriver<'d, PIO> {
                 } else {
                     RxPacketStatus::Invalid
                 };
-                return (n, status);
+                return (idx, status);
             } else if ram::now_us().wrapping_sub(td) > RX_DRAIN_TIMEOUT_US {
-                let status = if overflowed {
-                    RxPacketStatus::Overflow
-                } else {
-                    RxPacketStatus::Invalid
-                };
-                return (idx.min(out.len()), status);
+                return (idx, RxPacketStatus::Invalid);
             }
         }
     }
