@@ -69,6 +69,7 @@ To use this crate, add it as a dependency in your `Cargo.toml`:
 
 ```toml
 [dependencies]
+embassy-rp = { version = "0.10.0", features = ["time-driver", "critical-section-impl"] }
 embassy-usb-host = "0.2.2"
 rp-pio-usb-host = { version = "0.1.0", features = ["rp2040"] }
 static_cell = { version = "2.1.1"}
@@ -76,7 +77,8 @@ portable-atomic = { version = "1", default-features = false, features = ["critic
 ```
 
 You must enable exactly one of the features `rp2040`, `rp235xa` or `rp235xb` depending on which microcontroller
-you are using.
+you are using. Enable the optional `defmt` feature to turn on `defmt` support in the embassy crates this driver
+uses.
 
 Then, in your code, you can create a USB host instance and use it to interact with USB devices:
 
